@@ -1,0 +1,213 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans:
+    "Atlassian Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "Atlassian Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-surface: var(--destructive-surface);
+  --color-destructive-hover: var(--destructive-hover);
+  --color-success: var(--success);
+  --color-success-surface: var(--success-surface);
+  --color-warning: var(--warning);
+  --color-warning-surface: var(--warning-surface);
+  --color-discovery: var(--discovery);
+  --color-discovery-surface: var(--discovery-surface);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--foreground);
+  --color-sidebar-primary: var(--primary);
+  --color-sidebar-primary-foreground: var(--primary-foreground);
+  --color-sidebar-accent: var(--accent);
+  --color-sidebar-accent-foreground: var(--accent-foreground);
+  --color-sidebar-border: var(--border);
+  --color-sidebar-ring: var(--ring);
+  --spacing-control-xs: 1.75rem;
+  --spacing-control-sm: 2rem;
+  --spacing-control: 2.25rem;
+  --spacing-control-lg: 2.75rem;
+  --spacing-icon-xs: 0.875rem;
+  --spacing-icon: 1rem;
+  --spacing-icon-lg: 1.125rem;
+  --radius-control: 0.25rem;
+  --radius-surface: 0.5rem;
+  --radius-overlay: 0.75rem;
+  --color-blanket: var(--blanket);
+  --radius-sm: 0.1875rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.375rem;
+  --radius-xl: 0.5rem;
+  --radius-2xl: 0.75rem;
+  --radius-3xl: 1rem;
+  --radius-4xl: 1.5rem;
+}
+
+:root {
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #172b4d;
+  --card: #ffffff;
+  --primary: #0c66e4;
+  --primary-hover: #0055cc;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f2f4;
+  --muted: #f7f8f9;
+  --muted-foreground: #44546f;
+  --accent: #e9f2ff;
+  --accent-foreground: #0055cc;
+  --destructive: #ae2e24;
+  --destructive-surface: #ffeceb;
+  --destructive-hover: #ffd5d2;
+  --success: #216e4e;
+  --success-surface: #dcfff1;
+  --warning: #7f5f01;
+  --warning-surface: #fff7d6;
+  --discovery: #5e4db2;
+  --discovery-surface: #f3f0ff;
+  --border: #dcdfe4;
+  --input: #8590a2;
+  --ring: #388bff;
+  --sidebar: #f7f8f9;
+  --blanket: rgb(9 30 66 / 54%);
+  --rovo-blue: #1868db;
+  --rovo-purple: #6e5dc6;
+  --rovo-saffron: #fca700;
+  --rovo-lime: #94c748;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: #1d2125;
+  --foreground: #dee4ea;
+  --card: #22272b;
+  --primary: #579dff;
+  --primary-hover: #85b8ff;
+  --primary-foreground: #101214;
+  --secondary: #2c333a;
+  --muted: #22272b;
+  --muted-foreground: #9fadbc;
+  --accent: #1c2b42;
+  --accent-foreground: #85b8ff;
+  --destructive: #f87168;
+  --destructive-surface: #42221f;
+  --destructive-hover: #5d2c28;
+  --success: #7ee2b8;
+  --success-surface: #1c3329;
+  --warning: #eed12b;
+  --warning-surface: #332e1b;
+  --discovery: #b8acf6;
+  --discovery-surface: #2b273f;
+  --border: #3d474f;
+  --input: #738496;
+  --ring: #85b8ff;
+  --sidebar: #181c20;
+  --blanket: rgb(3 4 4 / 64%);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background font-sans text-sm text-foreground;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+  code,
+  kbd,
+  samp,
+  pre {
+    @apply font-mono;
+  }
+}
+
+@utility control-focus {
+  @apply outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring;
+}
+
+@utility control-field {
+  @apply min-w-0 rounded-control border border-input bg-card text-sm/5 text-foreground control-focus transition-colors placeholder:text-muted-foreground focus-visible:border-ring hover:enabled:border-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive;
+}
+
+@utility menu-row {
+  @apply flex min-h-control-sm items-center gap-2 rounded-control px-2 py-1 text-sm/5 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50;
+}
+
+@utility overlay-panel {
+  @apply rounded-surface border bg-popover p-1 text-sm/5 text-popover-foreground shadow-md outline-none;
+}
+
+@utility dialog-panel {
+  @apply fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] min-w-0 -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-overlay border bg-popover p-5 text-sm/5 text-popover-foreground shadow-lg outline-none sm:p-6;
+}
+
+@utility dialog-heading {
+  @apply font-heading text-lg/6 font-semibold;
+}
+
+@utility dialog-actions {
+  @apply flex flex-col-reverse gap-2 sm:flex-row sm:justify-end;
+}
+
+@property --generation-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.generative-border {
+  border: 2px solid transparent;
+  background:
+    linear-gradient(var(--card), var(--card)) padding-box,
+    conic-gradient(
+        from var(--generation-angle),
+        var(--rovo-blue) 0 25%,
+        var(--rovo-purple) 25% 50%,
+        var(--rovo-saffron) 50% 75%,
+        var(--rovo-lime) 75% 100%
+      )
+      border-box;
+  animation: generate-border 4s linear infinite;
+}
+
+@keyframes generate-border {
+  to {
+    --generation-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .generative-border {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .generative-border {
+    border-color: Highlight;
+  }
+}

@@ -1,0 +1,28 @@
+# Python and local environments
+/.venv/
+/venv/
+/.python-version
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build and test output
+/.uv-cache/
+/build/
+/dist/
+/.pytest_cache/
+/.ruff_cache/
+/.mypy_cache/
+/.pyright/
+/.coverage
+/.coverage.*
+/htmlcov/
+
+# Runtime data
+/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+/skills/

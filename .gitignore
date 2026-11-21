@@ -1,0 +1,49 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local environment and credentials
+*.env
+*.env.*
+!*.env.example
+!*.env.*.example
+!.env.sample
+.aws/
+.docker/
+.ssh/
+.secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local AI tooling and installed skills
+.agents/
+.aider-desk/
+.bob/
+.claude/
+.cline/
+.codex/
+.cursor/
+.github/copilot/
+.gemini/
+.kiro/
+.opencode/
+.roo/
+.windsurf/
+.aider*
+skills-lock.json
+
+# Local output and backups
+.ruff_cache/
+.pnpm-store/
+/backups/
+*.dump
+*.sql.gz
+*.rdb
+*.log
+*.tmp
