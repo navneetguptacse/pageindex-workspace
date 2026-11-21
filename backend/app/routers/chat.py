@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import AwareDatetime
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, func, select
@@ -16,7 +18,7 @@ from app.chat_answers import (
     ModelReply,
     complete_answer,
     document_list_answer,
-    is_document_list,
+    parse_document_list,
     scoped_answer,
 )
 from app.chat_context import Prompt, build_prompt, supplied_turns
@@ -127,8 +129,8 @@ def _agent_answer(
 def chat(session: SessionDep, body: ChatRequest) -> ChatHistory:
     settings = get_settings()
     workspace = current_workspace.get()
-    listing_documents = is_document_list(body.question)
-    model = None if listing_documents else body.model or settings.chat_model
+    document_list = parse_document_list(body.question)
+    model = None if document_list is not None else body.model or settings.chat_model
     if (
         model is not None
         and workspace is None
@@ -180,7 +182,20 @@ def chat(session: SessionDep, body: ChatRequest) -> ChatHistory:
     inventory = []
     scoped_document_ids = []
     provider = None
-    if listing_documents:
+    if document_list is not None:
+        if document_list.upload_day_offset is not None:
+            today = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
+            start = today - timedelta(days=document_list.upload_day_offset)
+            scope.extend(
+                [
+                    Document.uploaded_at >= start,
+                    Document.uploaded_at < start + timedelta(days=1),
+                ]
+            )
+        if document_list.larger_than is not None:
+            scope.append(Document.file_size > document_list.larger_than)
+        if document_list.smaller_than is not None:
+            scope.append(Document.file_size < document_list.smaller_than)
         documents = session.exec(
             select(Document).where(*scope).order_by(Document.filename, Document.id)
         ).all()
@@ -224,15 +239,15 @@ def chat(session: SessionDep, body: ChatRequest) -> ChatHistory:
     session.rollback()
 
     usage: dict[str, int] = {}
-    if model is None:
-        reply = document_list_answer(inventory)
+    if document_list is not None:
+        reply = document_list_answer(inventory, document_list)
     else:
         if not shared_workspace or scoped_document_ids:
-            reserve_provider_request(session, chat=True)
+            reserve_provider_request(session)
         try:
             with provider_request("chat"):
                 try:
-                    if provider is not None:
+                    if workspace is not None and provider is not None:
                         reply = scoped_answer(
                             prompt,
                             body.question,
@@ -242,6 +257,8 @@ def chat(session: SessionDep, body: ChatRequest) -> ChatHistory:
                             settings,
                             usage,
                             api_key=provider.api_key.get_secret_value(),
+                            session=session,
+                            workspace_id=workspace.id,
                         )
                     else:
                         reply = _agent_answer(
@@ -260,7 +277,7 @@ def chat(session: SessionDep, body: ChatRequest) -> ChatHistory:
                         detail="The model could not finish a complete answer. Try asking about one part at a time.",
                     ) from exc
         finally:
-            if usage:
+            if workspace is None and usage:
                 record_chat_tokens(
                     session,
                     usage.get("total_tokens")
@@ -317,7 +334,13 @@ def list_sessions(
     doc_id: str | None = None,
     collection_id: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    before_updated_at: AwareDatetime | None = None,
+    before_id: Annotated[str | None, Query(min_length=1, max_length=255)] = None,
 ) -> list[ChatSessionRead]:
+    if (before_updated_at is None) != (before_id is None):
+        raise HTTPException(
+            status_code=422, detail="Provide both conversation cursor fields"
+        )
     count = (
         select(func.count(ChatHistory.id))
         .where(ChatHistory.session_id == ChatSession.id)
@@ -350,6 +373,14 @@ def list_sessions(
         statement = statement.where(ChatSession.doc_id == doc_id)
     if collection_id:
         statement = statement.where(ChatSession.collection_id == collection_id)
+    if before_updated_at is not None and before_id is not None:
+        statement = statement.where(
+            (ChatSession.updated_at < before_updated_at)
+            | (
+                (ChatSession.updated_at == before_updated_at)
+                & (ChatSession.id < before_id)
+            )
+        )
 
     return [
         ChatSessionRead.model_validate(

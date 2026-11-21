@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
@@ -11,9 +12,15 @@ from app.models import Quota
 
 
 def increment_quota(
-    session: Session, key: str, interval: int, amount: int = 1, limit: int | None = None
-) -> None:
-    now = int(datetime.now(UTC).timestamp())
+    session: Session,
+    key: str,
+    interval: int,
+    amount: int = 1,
+    limit: int | None = None,
+    *,
+    timestamp: int | None = None,
+) -> int:
+    now = int(datetime.now(UTC).timestamp()) if timestamp is None else timestamp
     window = now // interval * interval
     insert = (
         postgres_insert
@@ -33,22 +40,16 @@ def increment_quota(
             detail="Workspace usage limit reached",
             headers={"Retry-After": str(window + interval - now)},
         )
+    return value
 
 
 def reserve_provider_request(
-    session: Session, *, chat: bool = False, amount: int = 1, commit: bool = True
+    session: Session, *, amount: int = 1, commit: bool = True
 ) -> None:
     workspace = current_workspace.get()
     if workspace is None:
         return
     settings = get_settings()
-    if chat:
-        window = int(datetime.now(UTC).timestamp()) // 86400 * 86400
-        used = session.get(Quota, (f"tokens:{workspace.id}", window))
-        if used and used.value >= settings.chat_tokens_per_day:
-            raise HTTPException(
-                status_code=429, detail="Workspace daily chat token limit reached"
-            )
     if amount > settings.provider_requests_per_day:
         raise HTTPException(
             status_code=429, detail="Workspace daily provider request limit reached"
@@ -62,6 +63,49 @@ def reserve_provider_request(
     )
     if commit:
         session.commit()
+
+
+@dataclass(frozen=True)
+class ChatTokenReservation:
+    key: str
+    timestamp: int
+    amount: int
+    output_tokens: int
+
+
+def reserve_chat_tokens(
+    session: Session, workspace_id: str, input_bound: int, requested_output: int
+) -> ChatTokenReservation:
+    key = f"tokens:{workspace_id}"
+    timestamp = int(datetime.now(UTC).timestamp())
+    used = increment_quota(session, key, 86400, amount=0, timestamp=timestamp)
+    output = min(
+        requested_output, get_settings().chat_tokens_per_day - used - input_bound
+    )
+    if output <= 0:
+        session.rollback()
+        raise HTTPException(
+            status_code=429,
+            detail="Not enough daily chat tokens for this request. Try a shorter conversation or wait for the daily reset.",
+            headers={"Retry-After": str(86400 - timestamp % 86400)},
+        )
+    amount = input_bound + output
+    increment_quota(session, key, 86400, amount=amount, timestamp=timestamp)
+    session.commit()
+    return ChatTokenReservation(key, timestamp, amount, output)
+
+
+def settle_chat_tokens(
+    session: Session, reservation: ChatTokenReservation, actual: int
+) -> None:
+    increment_quota(
+        session,
+        reservation.key,
+        86400,
+        amount=actual - reservation.amount,
+        timestamp=reservation.timestamp,
+    )
+    session.commit()
 
 
 def record_chat_tokens(session: Session, amount: int) -> None:

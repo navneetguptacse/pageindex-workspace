@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useRef, useState, type FormEvent } from "react"
+import { Suspense, useCallback, useRef, useState, type FormEvent } from "react"
 import { useSearchParams } from "next/navigation"
 import {
   ArrowUpIcon,
@@ -82,7 +82,8 @@ const prompts = [
   "Which risks or caveats are mentioned?",
 ]
 const loadDocuments = () => api.documents.list()
-const loadSessions = () => api.chat.listSessions()
+const historyPageSize = 50
+type HistoryCursor = Pick<ChatSession, "id" | "updated_at">
 
 function ChatMessageRow({
   message,
@@ -219,8 +220,29 @@ function ChatWorkspace() {
       : "library"
   const documents = useResource(loadDocuments)
   const collections = useResource(api.collections.list)
+  const [historyCursors, setHistoryCursors] = useState<HistoryCursor[]>([])
+  const cursor = historyCursors.at(-1) ?? null
+  const loadSessions = useCallback(
+    async () => ({
+      cursor,
+      items: await api.chat.listSessions({
+        limit: historyPageSize + 1,
+        before_id: cursor?.id,
+        before_updated_at: cursor?.updated_at,
+      }),
+    }),
+    [cursor]
+  )
   const sessions = useResource(loadSessions)
-  const chat = useConversation(initialScope, sessions.refresh)
+  const page =
+    sessions.data?.cursor === cursor ? sessions.data.items : undefined
+  const visibleSessions = page?.slice(0, historyPageSize) ?? []
+  const nextCursor =
+    page && page.length > historyPageSize ? visibleSessions.at(-1) : undefined
+  const chat = useConversation(initialScope, () => {
+    if (cursor) setHistoryCursors([])
+    else void sessions.refresh()
+  })
   const [draft, setDraft] = useState("")
   const [mobileHistory, setMobileHistory] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -280,17 +302,57 @@ function ChatWorkspace() {
   }
 
   const history = (
-    <ConversationList
-      sessions={sessions.data ?? []}
-      active={chat.sessionId}
-      disabled={generating}
-      onOpen={(id) => {
-        setMobileHistory(false)
-        setDraft("")
-        void chat.open(id)
-      }}
-      onDelete={setDeleteId}
-    />
+    <>
+      {page ? (
+        <ConversationList
+          sessions={visibleSessions}
+          active={chat.sessionId}
+          disabled={generating}
+          onOpen={(id) => {
+            setMobileHistory(false)
+            setDraft("")
+            void chat.open(id)
+          }}
+          onDelete={setDeleteId}
+        />
+      ) : sessions.error ? (
+        <Button variant="ghost" onClick={() => void sessions.refresh()}>
+          Retry loading conversations
+        </Button>
+      ) : (
+        <LoadingRows label="Loading conversations" />
+      )}
+      {(cursor || nextCursor) && (
+        <div className="mt-2 flex gap-1 border-t pt-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!cursor || generating || deletePending}
+            onClick={() =>
+              setHistoryCursors((previous) => previous.slice(0, -1))
+            }
+          >
+            Newer
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={
+              !nextCursor ||
+              Boolean(sessions.error) ||
+              generating ||
+              deletePending
+            }
+            onClick={() => {
+              if (nextCursor)
+                setHistoryCursors((previous) => [...previous, nextCursor])
+            }}
+          >
+            Older
+          </Button>
+        </div>
+      )}
+    </>
   )
 
   return (
@@ -334,13 +396,7 @@ function ChatWorkspace() {
       <div className="grid min-w-0 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]">
         <aside className="hidden min-w-0 flex-col rounded-surface border bg-card lg:flex">
           <h2 className="border-b px-4 py-3 font-semibold">Conversations</h2>
-          <div className="max-h-[65vh] overflow-auto p-2">
-            {sessions.loading ? (
-              <LoadingRows label="Loading conversations" />
-            ) : (
-              history
-            )}
-          </div>
+          <div className="max-h-[65vh] overflow-auto p-2">{history}</div>
         </aside>
         <section
           aria-label="Conversation"

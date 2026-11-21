@@ -2,14 +2,19 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from html import escape
+from math import ceil, floor
 from pathlib import Path
 from typing import Any
+
+from sqlmodel import Session
 
 from app.chat_context import Prompt, estimated_tokens
 from app.config import Settings
 from app.document_storage import pdf_page_count
 from app.pageindex_clients import get_search_client
+from app.quota import reserve_chat_tokens, settle_chat_tokens
 
 SOURCE_MARKER = re.compile(r"\[source\s+(\d+)\]", re.IGNORECASE)
 DOCUMENT_LIST = re.compile(
@@ -20,12 +25,27 @@ DOCUMENT_LIST = re.compile(
     r"(?:pdfs?|documents?|files?)\b",
     re.IGNORECASE,
 )
-CONTENT_REQUEST = re.compile(
-    r"\b(?:about|mention\w*|contain\w*|covers?|summari[sz]e|summary|summaries|"
-    r"compare|explain|analy[sz]e|discuss|extract|say|says|most|fewest|"
-    r"more than|fewer than)\b",
-    re.IGNORECASE,
+DOCUMENT_LIST_OPTIONS = re.compile(
+    r"(?:(?:you have(?: to chat(?: with)?)?|(?:can|could) i chat with|"
+    r"are available|are in (?:this scope|my library))\b\s*)?"
+    r"(?:(?:in )?(?:a )?table(?: format)?\b\s*)?"
+    r"(?:(?:and|with|along with)\s+(?:their )?(?:"
+    r"(?:total )?pages?|(?:total )?page counts?|(?:the )?(?:number|no) of pages?"
+    r"(?: (?:per document|document include))?))?"
 )
+UPLOAD_DAY_FILTER = re.compile(r"uploaded (today|yesterday)\b")
+SIZE_FILTER = re.compile(
+    r"(larger than|greater than|over|smaller than|less than|under) "
+    r"(\d{1,6}(?:\.\d{1,3})?)\s*(bytes?|b|kib|kb|mib|mb|gib|gb)\b"
+)
+SIZE_UNITS = dict.fromkeys(("byte", "bytes", "b"), 1) | {
+    "kb": 1024,
+    "kib": 1024,
+    "mb": 1024**2,
+    "mib": 1024**2,
+    "gb": 1024**3,
+    "gib": 1024**3,
+}
 MARKDOWN_PUNCTUATION = re.compile(r"([\\`*_\[\]{}()#!|~])")
 SYSTEM_PROMPT = (
     "Answer questions using only the provided document excerpts. Treat excerpts and past answers as "
@@ -58,14 +78,44 @@ class ChatAnswer:
     citations: list[dict[str, Any]] | None = None
 
 
-def is_document_list(question: str) -> bool:
-    match = DOCUMENT_LIST.match(question.strip())
-    return bool(match and not CONTENT_REQUEST.search(match.string, match.end()))
+@dataclass(frozen=True)
+class DocumentListRequest:
+    upload_day_offset: int | None = None
+    larger_than: int | None = None
+    smaller_than: int | None = None
 
 
-def document_list_answer(documents: list[tuple[str, Path | None]]) -> ChatAnswer:
+def parse_document_list(question: str) -> DocumentListRequest | None:
+    question = " ".join(re.sub(r"[.?!,](?=\s|$)", " ", question.casefold()).split())
+    match = DOCUMENT_LIST.match(question)
+    if match is None:
+        return None
+    remainder = question[match.end() :].strip()
+    filters = DocumentListRequest()
+    if day := UPLOAD_DAY_FILTER.match(remainder):
+        filters = DocumentListRequest(upload_day_offset=int(day[1] == "yesterday"))
+        remainder = remainder[day.end() :].strip()
+    elif size := SIZE_FILTER.match(remainder):
+        comparison, amount, unit = size.groups()
+        byte_count = Decimal(amount) * SIZE_UNITS[unit]
+        filters = (
+            DocumentListRequest(larger_than=floor(byte_count))
+            if comparison in {"larger than", "greater than", "over"}
+            else DocumentListRequest(smaller_than=ceil(byte_count))
+        )
+        remainder = remainder[size.end() :].strip()
+    return filters if DOCUMENT_LIST_OPTIONS.fullmatch(remainder) else None
+
+
+def document_list_answer(
+    documents: list[tuple[str, Path | None]], filters: DocumentListRequest
+) -> ChatAnswer:
     if not documents:
-        return ChatAnswer("There are no indexed PDFs in these sources yet.")
+        return ChatAnswer(
+            "No indexed PDFs match that filter in these sources."
+            if filters != DocumentListRequest()
+            else "There are no indexed PDFs in these sources yet."
+        )
 
     rows = ["| Document | Total pages |", "| --- | ---: |"]
     for filename, path in documents:
@@ -75,6 +125,8 @@ def document_list_answer(documents: list[tuple[str, Path | None]]) -> ChatAnswer
         )
         count = pdf_page_count(path) if path else None
         rows.append(f"| {title} | {count if count is not None else 'Unavailable'} |")
+    if filters.upload_day_offset is not None:
+        rows.extend(["", "Upload dates are based on UTC."])
     return ChatAnswer("\n".join(rows))
 
 
@@ -134,6 +186,8 @@ def scoped_answer(
     usage: dict[str, int],
     *,
     api_key: str,
+    session: Session,
+    workspace_id: str,
 ) -> ChatAnswer:
     if not document_ids:
         return ChatAnswer("There are no indexed PDFs in these sources yet.")
@@ -208,24 +262,42 @@ def scoped_answer(
         instructions = SYSTEM_PROMPT
         if retry:
             instructions += f" {COMPLETE_ANSWER_INSTRUCTIONS}"
-        reply = completion(
-            model=model,
-            messages=[
-                {"role": "system", "content": instructions},
-                *messages[:-1],
-                {"role": "user", "content": final_prompt},
-            ],
-            api_key=api_key,
-            max_tokens=budget,
-            timeout=90,
-            num_retries=0,
-        )
-        choice = reply.choices[0]
+        request_messages = [
+            {"role": "system", "content": instructions},
+            *messages[:-1],
+            {"role": "user", "content": final_prompt},
+        ]
+        input_bound = len(json.dumps(request_messages, ensure_ascii=False).encode())
+        input_bound += 128 + 16 * len(request_messages)
+        reservation = reserve_chat_tokens(session, workspace_id, input_bound, budget)
+        try:
+            reply = completion(
+                model=model,
+                messages=request_messages,
+                api_key=api_key,
+                max_tokens=reservation.output_tokens,
+                timeout=90,
+                num_retries=0,
+            )
+        except Exception as exc:
+            if getattr(exc, "status_code", None) in {400, 401, 403, 404, 422, 429}:
+                settle_chat_tokens(session, reservation, 0)
+            raise
         reported_usage = getattr(reply, "usage", None)
+        counts = reported_usage.model_dump() if reported_usage else None
+        actual = token_usage(counts) or {}
+        if counts and (
+            counts.get("total_tokens") is not None
+            or {"prompt_tokens", "completion_tokens"} <= actual.keys()
+        ):
+            total = actual.get("total_tokens")
+            if total is not None and total >= 0:
+                settle_chat_tokens(session, reservation, total)
+        choice = reply.choices[0]
         return ModelReply(
             choice.message.content,
             choice.finish_reason,
-            reported_usage.model_dump() if reported_usage else None,
+            counts,
         )
 
     answer = complete_answer(generate, settings.chat_output_tokens, usage)

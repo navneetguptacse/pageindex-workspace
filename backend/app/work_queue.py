@@ -1,7 +1,7 @@
 import hashlib
 import json
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 LEASE_TIME = timedelta(minutes=15)
 POLL_INTERVAL = timedelta(seconds=5)
 RETRY_LIMIT = 4
+REJECTED_REQUEST = {400, 401, 403, 413, 415, 422}
+SCHEDULE_KEY = "_resource_schedule"
 UPLOAD_REJECTED = "PageIndex could not index this PDF."
 SUBMISSION_UNCONFIRMED = (
     "Submission could not be confirmed. Verify the provider before retrying."
@@ -36,6 +38,10 @@ SUBMISSION_UNCONFIRMED = (
 PENDING_UPLOAD = {"queued", "submitting", "processing"}
 IdempotencyKey = Annotated[str | None, Header(min_length=8, max_length=128)]
 PENDING_EXTRACTION = {"queued", "submitting", "pending", "running"}
+
+
+class SubmissionNotFound(Exception):
+    pass
 
 
 def prefers_background(prefer: str | None) -> bool:
@@ -136,12 +142,15 @@ def requeue_upload(session: Session, document: Document) -> None:
         .values(
             done=False, lease_until=None, available_at=now, created_at=now, failures=0
         )
-        .returning(WorkItem.id)
+        .returning(WorkItem)
     ).scalar_one_or_none()
     if requeued is None:
         raise HTTPException(
             status_code=409, detail="This upload batch is busy. Try again shortly."
         )
+    schedule = dict(requeued.payload.get(SCHEDULE_KEY, {}))
+    schedule.pop(member, None)
+    requeued.payload = {**requeued.payload, SCHEDULE_KEY: schedule}
 
 
 def _claim_work() -> WorkItem | None:
@@ -207,11 +216,20 @@ def _upload_step(session: Session, document: Document) -> None:
         return
 
     if document.status == "submitting":
+        from pageindex.errors import PageIndexAPIError
         from pageindex.naming import sanitize_filename
 
         name = sanitize_filename(path.name)
-        provider_id = client.get_document_id(name)
-        result = client.get_document(provider_id)
+        try:
+            provider_id = client.get_document_id(name)
+            result = client.get_document(provider_id)
+        except PageIndexAPIError as exc:
+            if (
+                exc.status_code == 404
+                or str(exc) == f"No document named {name!r} found."
+            ):
+                raise SubmissionNotFound from exc
+            raise
         if result.get("name") != name:
             _fail(
                 document,
@@ -232,12 +250,13 @@ def _upload_step(session: Session, document: Document) -> None:
         if collection and collection.pageindex_collection_id
         else {}
     )
+    document.doc_id = str(document.id)
     document.status = "submitting"
     session.commit()
     try:
         result = client.submit_document(str(path), wait=False, **options)
     except Exception as exc:
-        if getattr(exc, "status_code", None) == 429:
+        if getattr(exc, "status_code", None) in REJECTED_REQUEST | {429}:
             document.status = "queued"
         raise
     document.doc_id = result["doc_id"]
@@ -296,41 +315,39 @@ def _run_work(session: Session, work: WorkItem) -> None:
         for resource in resources:
             _fail(
                 resource,
-                "Processing exceeded its time limit. Check the provider before retrying.",
+                SUBMISSION_UNCONFIRMED
+                if isinstance(resource, Document) and resource.status == "submitting"
+                else "Processing exceeded its time limit. Check the provider before retrying.",
             )
         work.done = True
         return
 
-    resource = min(
-        resources,
-        key=lambda item: (item.status != "queued", item.status != "submitting"),
-    )
+    schedule = dict(work.payload.get(SCHEDULE_KEY, {}))
+    resource = min(resources, key=lambda item: schedule.get(str(item.id), (0, 0))[0])
+    member = str(resource.id)
+    due, failures = schedule.get(member, (0, 0))
+    if due > utc_now().timestamp():
+        work.available_at = datetime.fromtimestamp(due, UTC)
+        return
     try:
         if isinstance(resource, Document):
             _upload_step(session, resource)
         else:
             _extraction_step(session, resource, work.payload)
     except Exception as exc:
-        work.failures += 1
+        failures += 1
         status_code = getattr(exc, "status_code", None)
         if isinstance(exc, ProviderSetupError) and resource.status != "submitting":
             _fail(resource, exc.detail)
-            work.failures = 0
-        elif work.failures >= RETRY_LIMIT or status_code in {
-            400,
-            401,
-            403,
-            413,
-            415,
-            422,
-        }:
+        elif failures >= RETRY_LIMIT or status_code in REJECTED_REQUEST:
             detail = (
-                SUBMISSION_UNCONFIRMED
-                if resource.status == "submitting"
-                else "Processing failed. Check the document and workspace provider settings."
+                "Processing failed. Check the document and workspace provider settings."
             )
+            if isinstance(exc, SubmissionNotFound):
+                detail = "PageIndex has no confirmed copy. Retry to submit the stored PDF again."
+            elif resource.status == "submitting":
+                detail = SUBMISSION_UNCONFIRMED
             _fail(resource, detail)
-            work.failures = 0
         logger.warning(
             "Background %s step failed for %s (%s, status %s)",
             work.kind,
@@ -339,14 +356,24 @@ def _run_work(session: Session, work: WorkItem) -> None:
             status_code,
             exc_info=work.owner_id is None,
         )
-        work.available_at = utc_now() + POLL_INTERVAL * 2**work.failures
     else:
-        work.failures = 0
-        work.available_at = utc_now() + (
-            timedelta(0)
-            if any(item.status == "queued" for item in resources)
-            else POLL_INTERVAL
-        )
+        failures = 0
+
+    now = utc_now()
+    pending_states = PENDING_UPLOAD if work.kind == "upload" else PENDING_EXTRACTION
+    pending = {str(item.id) for item in resources if item.status in pending_states}
+    schedule[member] = [(now + POLL_INTERVAL * 2**failures).timestamp(), failures]
+    schedule = {key: value for key, value in schedule.items() if key in pending}
+    work.payload = {**work.payload, SCHEDULE_KEY: schedule}
+    work.done = not pending
+    work.available_at = datetime.fromtimestamp(
+        min(
+            (schedule.get(key, (now.timestamp(), 0))[0] for key in pending),
+            default=now.timestamp(),
+        ),
+        UTC,
+    )
+    work.failures = failures if member in pending else 0
 
 
 def process_next() -> bool:

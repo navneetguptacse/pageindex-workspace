@@ -27,4 +27,4 @@ The public homepage at `/` links to the workspace, sign-in, and registration. Wi
 
 - In **Provider settings**, save a PageIndex API key for PDF features and a chat provider, API key, and model for answers.
 - In **Documents**, use the **⋯** menu to rename a PDF or retry a failed upload with the existing file.
-- In **Chat**, choose a library, collection, or single PDF. Ask “List the documents and their total pages” to get a table for the selected scope without using model tokens.
+- In **Chat**, choose a library, collection, or single PDF. Ask “List the documents and their total pages” to get a table for the selected scope without using model tokens. Use **Older** and **Newer** in conversation history to browse saved chats.

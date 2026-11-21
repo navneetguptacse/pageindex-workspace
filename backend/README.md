@@ -26,9 +26,11 @@ Open the [API docs](http://localhost:8000/docs). From the repo root, run `make t
 
 ## Chat
 
-Document-list questions return the ready PDFs in the current library, collection, or single-PDF scope. Page counts come from the stored PDF, or show **Unavailable** if it can’t be read. These responses use zero model tokens.
+Document-list questions return the ready PDFs in the current library, collection, or single-PDF scope. They support uploads from today or yesterday in UTC and size comparisons such as “List files larger than 10 MB.” Page counts come from the stored PDF and show **Unavailable** if it can’t be read. These responses use zero model tokens.
 
 Content questions use the model. The first attempt allows up to 4,096 output tokens within the configured limit. If the first answer is cut off, chat retries once with instructions to produce a concise, complete answer. The retry uses `CHAT_OUTPUT_TOKENS`, which defaults to 8,192.
+
+For signed-in accounts, each model call reserves a conservative input allowance and its output budget from `CHAT_TOKENS_PER_DAY`. Concurrent calls share that budget. The server replaces the reservation with the provider’s reported usage when available. Calls with unknown usage may retain the reservation until the UTC reset.
 
 Run `uv run --locked python -m app.evaluate_chat scenarios.json` to validate cases. Each case has a `name` and `turns` with a `question` and optional `expected_text` or `expected_pages`. Add `--live` to send requests to the app and `--username` to sign into a password-based account. Set `--url` to the frontend origin for Docker Compose.
 

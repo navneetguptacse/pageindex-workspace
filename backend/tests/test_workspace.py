@@ -1,8 +1,10 @@
 import sys
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import UUID
@@ -10,22 +12,28 @@ from uuid import UUID
 import pypdfium2 as pdfium
 from cryptography.fernet import Fernet
 from database_support import test_engine
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pageindex.errors import PageIndexAPIError
 from sqlmodel import Session, select
 
-from app import database
+from app import database, manage_users
+from app.chat_answers import parse_document_list
 from app.config import Settings
 from app.document_storage import upload_path
 from app.models import (
     ChatSession,
     Collection,
     Document,
+    ExtractJob,
+    Quota,
     WorkItem,
     WorkspaceProviders,
     WorkspaceUser,
     utc_now,
 )
 from app.pageindex_clients import provider_key
+from app.quota import reserve_chat_tokens, settle_chat_tokens
 from app.work_queue import process_next
 from app.workspace import hash_password
 from main import app
@@ -199,16 +207,112 @@ class TestWorkspace(unittest.TestCase):
         provider.get_document.return_value = {"status": "completed"}
         with patch("app.work_queue.get_pageindex_client", return_value=provider):
             self.assertTrue(process_next())
-            with Session(self.engine) as session:
-                work = session.exec(select(WorkItem)).one()
-                work.available_at = utc_now()
-                session.commit()
-            self.assertTrue(process_next())
+            with patch(
+                "app.work_queue.utc_now", return_value=utc_now() + timedelta(seconds=6)
+            ):
+                self.assertTrue(process_next())
         result = self.client.get(f"/api/v1/documents/{resource['id']}")
         self.assertEqual(result.json()["status"], "ready")
         self.assertEqual(result.json()["doc_id"], "queued-remote")
         self.assertEqual(result.json()["filename"], "Queued report.pdf")
         provider.submit_document.assert_called_once()
+
+    def test_worker_advances_other_pdfs_and_resubmits_rejected_upload(self):
+        self.login()
+        saved = self.client.patch(
+            "/api/v1/workspace/account/providers",
+            json={"pageindex_api_key": "workspace-test-key"},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        response = self.client.post(
+            "/api/v1/documents/batch",
+            headers={"Prefer": "respond-async"},
+            files=[
+                ("files", (filename, b"%PDF-1.4 test"))
+                for filename in ("slow.pdf", "fast.pdf", "retry.pdf")
+            ],
+        )
+        self.assertEqual(response.status_code, 202, response.text)
+        documents = {row["filename"]: row["id"] for row in response.json()}
+        provider = MagicMock()
+
+        def submit(path, **_options):
+            filename = Path(path).name.split("_", 1)[1]
+            if filename == "retry.pdf":
+                raise PageIndexAPIError("Rejected", status_code=401)
+            return {"doc_id": filename}
+
+        provider.submit_document.side_effect = submit
+        provider.get_document.side_effect = lambda key: {
+            "status": "processing" if key == "slow.pdf" else "completed"
+        }
+        with patch("app.work_queue.get_pageindex_client", return_value=provider):
+            for _ in documents:
+                self.assertTrue(process_next())
+            with patch(
+                "app.work_queue.utc_now", return_value=utc_now() + timedelta(seconds=6)
+            ):
+                self.assertTrue(process_next())
+                self.assertTrue(process_next())
+            for filename, status in (
+                ("slow.pdf", "processing"),
+                ("fast.pdf", "ready"),
+                ("retry.pdf", "failed"),
+            ):
+                row = self.client.get(f"/api/v1/documents/{documents[filename]}").json()
+                self.assertEqual(row["status"], status)
+            provider.submit_document.side_effect = None
+            provider.submit_document.return_value = {"doc_id": "retried"}
+            retry = self.client.post(
+                f"/api/v1/documents/{documents['retry.pdf']}/retry"
+            )
+            self.assertEqual(retry.status_code, 202, retry.text)
+            self.assertEqual(retry.json()["status"], "queued")
+            self.assertTrue(process_next())
+            provider.get_document_id.assert_not_called()
+            self.assertTrue(
+                provider.submit_document.call_args.args[0].endswith("_retry.pdf")
+            )
+
+    def test_claiming_local_data_moves_pending_upload_and_extract_jobs(self):
+        with Session(self.engine) as session:
+            source = session.exec(
+                select(Document).where(Document.doc_id == "local-only")
+            ).one()
+            upload = Document(
+                doc_id="local-upload", filename="queued.pdf", status="queued"
+            )
+            extraction = ExtractJob(
+                document_id=source.id, pageindex_job_id="", status="queued"
+            )
+            jobs = [
+                WorkItem(kind=kind, fingerprint="pending", resource_ids=[str(row.id)])
+                for kind, row in (("upload", upload), ("extract", extraction))
+            ]
+            ids = [job.id for job in jobs]
+            session.add_all([upload, extraction, *jobs])
+            session.commit()
+
+        with (
+            patch.object(manage_users, "engine", self.engine),
+            patch.object(manage_users, "create_db_and_tables"),
+            patch("sys.argv", ["manage_users", "new-user", "--claim-local-data"]),
+            patch("getpass.getpass", return_value="test-password-only"),
+            patch("builtins.print"),
+        ):
+            manage_users.main()
+        with Session(self.engine) as session:
+            owner = session.exec(
+                select(WorkspaceUser).where(WorkspaceUser.username == "new-user")
+            ).one()
+            for job_id in ids:
+                job = session.get(WorkItem, job_id)
+                self.assertEqual(job.owner_id, owner.id)
+                self.assertFalse(job.done)
+                model = Document if job.kind == "upload" else ExtractJob
+                self.assertEqual(
+                    session.get(model, UUID(job.resource_ids[0])).owner_id, owner.id
+                )
 
     def test_retry_reuses_stored_pdf_and_upload_job(self):
         self.login()
@@ -292,6 +396,8 @@ class TestWorkspace(unittest.TestCase):
             ).one()
             document.filename = "guide|policies.pdf"
             document.collection_id = collection.id
+            document.file_size = 12 * 1024**2
+            document.uploaded_at = utc_now() - timedelta(days=1)
             path = upload_path(document)
             path.parent.mkdir(parents=True, exist_ok=True)
             with pdfium.PdfDocument.new() as pdf:
@@ -305,6 +411,7 @@ class TestWorkspace(unittest.TestCase):
                         doc_id="missing-file",
                         filename="missing.pdf",
                         status="ready",
+                        file_size=1024,
                     ),
                     Document(
                         owner_id=self.alice_id,
@@ -353,8 +460,93 @@ class TestWorkspace(unittest.TestCase):
                 self.assertIsNone(answer["model"])
                 self.assertIsNone(answer["citations"])
                 self.assertIsNone(answer["usage"])
+            yesterday = self.client.post(
+                "/api/v1/chat/", json={"question": "List documents uploaded yesterday."}
+            )
+            self.assertEqual(yesterday.status_code, 201, yesterday.text)
+            self.assertEqual(
+                yesterday.json()["answer"],
+                expected + "\n\nUpload dates are based on UTC.",
+            )
+            large = self.client.post(
+                "/api/v1/chat/", json={"question": "List files larger than 10 MB."}
+            )
+            self.assertEqual(large.status_code, 201, large.text)
+            self.assertEqual(large.json()["answer"], expected)
+            empty = self.client.post(
+                "/api/v1/chat/", json={"question": "List files larger than 20 MB."}
+            )
+            self.assertEqual(empty.status_code, 201, empty.text)
+            self.assertIn("No indexed PDFs match", empty.json()["answer"])
             model_provider.assert_not_called()
             reserve.assert_not_called()
+        self.assertIsNone(
+            parse_document_list("List files containing the word password.")
+        )
+        self.assertIsNone(parse_document_list("List documents uploaded last week."))
+
+    def test_chat_history_cursor_reaches_older_conversations_with_tied_times(self):
+        self.login()
+        updated = utc_now()
+        with Session(self.engine) as session:
+            session.add_all(
+                [
+                    ChatSession(
+                        id=f"history-{index:03}",
+                        owner_id=self.alice_id,
+                        updated_at=updated,
+                    )
+                    for index in range(55)
+                ]
+            )
+            session.commit()
+        path = "/api/v1/chat/sessions"
+        first = self.client.get(path).json()
+        self.assertEqual(len(first), 50)
+        cursor = first[-1]
+        second = self.client.get(
+            path,
+            params={
+                "before_updated_at": cursor["updated_at"],
+                "before_id": cursor["id"],
+            },
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(
+            [row["id"] for row in second.json()],
+            [f"history-{index:03}" for index in range(4, -1, -1)],
+        )
+
+    def test_concurrent_chat_token_reservations_share_one_limit(self):
+        settings = Settings(_env_file=None, chat_tokens_per_day=100)
+        barrier = Barrier(2, timeout=5)
+
+        def reserve():
+            barrier.wait()
+            with Session(self.engine) as session:
+                try:
+                    return reserve_chat_tokens(session, self.alice_id, 30, 80)
+                except HTTPException as exc:
+                    self.assertEqual(exc.status_code, 429)
+                    return None
+
+        with patch("app.quota.get_settings", return_value=settings):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                reservations = [
+                    result
+                    for result in executor.map(lambda _: reserve(), range(2))
+                    if result
+                ]
+            self.assertEqual(len(reservations), 1)
+            reservation = reservations[0]
+            self.assertEqual(reservation.output_tokens, 70)
+            with Session(self.engine) as session:
+                settle_chat_tokens(session, reservation, 60)
+                next_reservation = reserve_chat_tokens(session, self.alice_id, 30, 80)
+                self.assertEqual(next_reservation.output_tokens, 10)
+                settle_chat_tokens(session, next_reservation, 33)
+                key = (reservation.key, reservation.timestamp // 86400 * 86400)
+                self.assertEqual(session.get(Quota, key).value, 93)
 
     def test_workspace_chat_retrieves_only_owned_documents_and_tracks_tokens(self):
         self.login()

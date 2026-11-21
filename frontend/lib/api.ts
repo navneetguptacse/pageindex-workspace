@@ -368,8 +368,14 @@ export const api = {
       },
       signal?: AbortSignal
     ) => post<ChatResponse>("/chat", body, {}, signal),
-    listSessions: (params: ChatTarget = {}, signal?: AbortSignal) =>
-      request<ChatSession[]>(`/chat/sessions${query(params)}`, { signal }),
+    listSessions: (
+      params: ChatTarget & {
+        limit?: number
+        before_updated_at?: string
+        before_id?: string
+      } = {},
+      signal?: AbortSignal
+    ) => request<ChatSession[]>(`/chat/sessions${query(params)}`, { signal }),
     getSession: (id: string, signal?: AbortSignal) =>
       request<ChatSessionDetail>(`/chat/sessions/${encodeURIComponent(id)}`, {
         signal,
