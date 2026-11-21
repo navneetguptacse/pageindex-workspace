@@ -1,5 +1,6 @@
 "use client"
 
+import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
@@ -347,6 +348,18 @@ export function WorkspaceAuth({ view }: { view: AuthView }) {
                         }
                         nativeButton={false}
                       >
+                        <Image
+                          src={`/icons/auth/${provider}.svg`}
+                          alt=""
+                          width={16}
+                          height={16}
+                          data-icon="inline-start"
+                          className={
+                            provider === "github"
+                              ? "shrink-0 dark:invert"
+                              : "shrink-0"
+                          }
+                        />
                         Continue with {oauthName[provider]}
                       </Button>
                     ))}
