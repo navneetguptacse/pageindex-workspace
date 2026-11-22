@@ -278,7 +278,7 @@ export default function DocumentsPage() {
                     {file.status === "ready" && (
                       <>
                         <DropdownMenuItem onClick={() => setPreview(file)}>
-                          Open preview
+                          Preview
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           render={
@@ -287,7 +287,7 @@ export default function DocumentsPage() {
                             />
                           }
                         >
-                          Ask about this PDF
+                          Chat
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           render={
@@ -305,7 +305,7 @@ export default function DocumentsPage() {
                             />
                           }
                         >
-                          Extract data
+                          Extract
                         </DropdownMenuItem>
                       </>
                     )}
@@ -349,7 +349,7 @@ export default function DocumentsPage() {
                 Cancel
               </Button>
               <Button disabled={creating} type="submit">
-                {creating ? "Creating…" : "Create collection"}
+                {creating ? "Creating…" : "Create"}
               </Button>
             </DialogFooter>
           </form>

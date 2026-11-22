@@ -1,8 +1,9 @@
 "use client"
 
-import { useContext, useState, type FormEvent } from "react"
+import { useContext, useRef, useState, type FormEvent } from "react"
 
 import { WorkspaceStatusUpdateContext } from "@/components/workspace-gate"
+import { UserAvatar } from "@/components/user-avatar"
 import { ErrorNotice } from "@/components/workspace-ui"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -96,6 +97,7 @@ export function WorkspaceProfile({ status }: { status: WorkspaceStatus }) {
         <h2 className="font-semibold">Profile</h2>
       </CardHeader>
       <CardContent className="grid gap-4">
+        <ProfilePhoto status={status} />
         <dl className="grid gap-1 text-sm">
           <dt className="text-muted-foreground">Username</dt>
           <dd className="font-medium break-all">{status.username}</dd>
@@ -157,6 +159,83 @@ export function WorkspaceProfile({ status }: { status: WorkspaceStatus }) {
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+function ProfilePhoto({ status }: { status: WorkspaceStatus }) {
+  const updateStatus = useContext(WorkspaceStatusUpdateContext)
+  const input = useRef<HTMLInputElement>(null)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState("")
+
+  async function changePhoto(file?: File) {
+    setError("")
+    if (file && file.size > 2 * 1024 * 1024) {
+      setError("Choose a profile picture no larger than 2 MB.")
+      return
+    }
+    setPending(true)
+    try {
+      const saved = file
+        ? await api.workspace.uploadAvatar(file)
+        : await api.workspace.removeAvatar()
+      updateStatus((current) =>
+        current?.username === saved.username
+          ? { ...current, avatar_url: saved.avatar_url }
+          : current
+      )
+    } catch (error) {
+      setError(errorMessage(error))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <UserAvatar profile={status} size="lg" />
+        <input
+          ref={input}
+          type="file"
+          hidden
+          accept="image/jpeg,image/png,image/webp"
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0]
+            event.currentTarget.value = ""
+            if (file) void changePhoto(file)
+          }}
+        />
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={pending}
+            onClick={() => input.current?.click()}
+          >
+            {status.avatar_url ? "Change photo" : "Upload photo"}
+          </Button>
+          {status.avatar_url && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={pending}
+              onClick={() => void changePhoto()}
+            >
+              Remove photo
+            </Button>
+          )}
+        </div>
+      </div>
+      {pending && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Updating photo…
+        </p>
+      )}
+      {error && <ErrorNotice>{error}</ErrorNotice>}
+    </div>
   )
 }
 
@@ -272,11 +351,14 @@ function EmailChangeForm({
             <div className="flex flex-wrap gap-2">
               <Button type="submit" disabled={pending}>
                 {pending && <Spinner data-icon="inline-start" />}
-                {address ? "Verify and update email" : "Send verification code"}
+                {address ? "Verify email" : "Send code"}
               </Button>
               <Button
                 type="button"
                 variant="ghost"
+                aria-label={
+                  address ? "Back to change email or resend code" : undefined
+                }
                 disabled={pending}
                 onClick={() => {
                   setError("")
@@ -285,7 +367,7 @@ function EmailChangeForm({
                   else setEditing(false)
                 }}
               >
-                {address ? "Change address or resend" : "Cancel"}
+                {address ? "Back" : "Cancel"}
               </Button>
             </div>
           </FieldGroup>

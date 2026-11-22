@@ -358,33 +358,50 @@ function ConnectionActions({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button type="submit" disabled={Boolean(pending)}>
+      <Button
+        type="submit"
+        aria-label={
+          connection === "pageindex"
+            ? "Save PageIndex key"
+            : "Save chat settings"
+        }
+        disabled={Boolean(pending)}
+      >
         {pending?.connection === connection && pending.action === "save" && (
           <Spinner data-icon="inline-start" />
         )}
-        {connection === "pageindex"
-          ? "Save PageIndex key"
-          : "Save chat settings"}
+        Save
       </Button>
       {configured && (
         <>
           <Button
             type="button"
             variant="outline"
+            aria-label={
+              connection === "pageindex"
+                ? "Test saved PageIndex connection"
+                : "Test saved chat connection"
+            }
+            title="Test saved connection"
             onClick={() => onTest(connection)}
             disabled={Boolean(pending)}
           >
             {pending?.connection === connection &&
               pending.action === "test" && <Spinner data-icon="inline-start" />}
-            Test saved connection
+            Test
           </Button>
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
+            aria-label={
+              connection === "pageindex"
+                ? "Remove PageIndex key"
+                : "Remove chat key"
+            }
             onClick={() => onRemove(connection)}
             disabled={Boolean(pending)}
           >
-            Remove key
+            Remove
           </Button>
         </>
       )}

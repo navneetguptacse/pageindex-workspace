@@ -316,8 +316,12 @@ function ChatWorkspace() {
           onDelete={setDeleteId}
         />
       ) : sessions.error ? (
-        <Button variant="ghost" onClick={() => void sessions.refresh()}>
-          Retry loading conversations
+        <Button
+          variant="ghost"
+          aria-label="Retry loading conversations"
+          onClick={() => void sessions.refresh()}
+        >
+          Retry
         </Button>
       ) : (
         <LoadingRows label="Loading conversations" />

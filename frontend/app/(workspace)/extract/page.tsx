@@ -337,7 +337,7 @@ function ExtractWorkspace({ doc }: { doc: string | null }) {
                   ) : (
                     <Table2Icon data-icon="inline-start" />
                   )}
-                  {busy ? "Queuing…" : "Run extraction"}
+                  {busy ? "Queuing…" : "Extract"}
                 </Button>
               </FieldGroup>
             </form>

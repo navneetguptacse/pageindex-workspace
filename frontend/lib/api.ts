@@ -177,6 +177,7 @@ export interface WorkspaceStatus {
   username: string | null
   first_name: string | null
   last_name: string | null
+  avatar_url: string | null
   email: string | null
   email_verified: boolean
   has_password: boolean
@@ -320,6 +321,18 @@ export const api = {
       post<{ message: string }>("/workspace/reset-password", {
         token,
         password,
+      }),
+    uploadAvatar: (file: File) => {
+      const body = new FormData()
+      body.set("photo", file)
+      return request<WorkspaceStatus>("/workspace/account/avatar", {
+        method: "PUT",
+        body,
+      })
+    },
+    removeAvatar: () =>
+      request<WorkspaceStatus>("/workspace/account/avatar", {
+        method: "DELETE",
       }),
     updateProfile: (names: ProfileNames) =>
       request<WorkspaceStatus>("/workspace/account/profile", {

@@ -175,7 +175,7 @@ export function DocumentUpload({
           </Button>
           <Button onClick={upload} disabled={!files.length || uploading}>
             {uploading && <Spinner data-icon="inline-start" />}
-            {uploading ? "Uploading…" : "Upload PDFs"}
+            {uploading ? "Uploading…" : "Upload"}
           </Button>
         </DialogFooter>
       </DialogContent>

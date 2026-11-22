@@ -119,6 +119,14 @@ class WorkspaceUser(SQLModel, table=True):
     email_verified: bool = False
 
 
+class WorkspaceAvatar(SQLModel, table=True):
+    user_id: str = Field(
+        primary_key=True, foreign_key="workspaceuser.id", ondelete="CASCADE"
+    )
+    image: bytes
+    revision: str = Field(default_factory=lambda: uuid.uuid4().hex)
+
+
 class WorkspaceProviders(SQLModel, table=True):
     user_id: str = Field(
         primary_key=True, foreign_key="workspaceuser.id", ondelete="CASCADE"

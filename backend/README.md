@@ -50,7 +50,7 @@ Set `PROVIDER_CREDENTIALS_ENCRYPTION_KEY` once in the root `.env`. Generate its 
 
 After signing in, users open **Account → Profile & settings → Provider settings** to save their own PageIndex API key. For chat, choose OpenAI, DeepSeek, Anthropic, or Google Gemini and enter that provider’s API key and model ID. Credentials are encrypted and saved per account. When replacing a PageIndex key, use one for the same library to retain access to documents already indexed there.
 
-The app checks provider credentials and model access before saving. PageIndex uses a read-only library request. Chat sends a short test prompt to the selected model, which may use provider credits. Use **Test saved connection** to check saved credentials again after rotating a key or changing provider permissions.
+The app checks provider credentials and model access before saving. PageIndex uses a read-only library request. Chat sends a short test prompt to the selected model, which may use provider credits. Use **Test** to check saved credentials again after rotating a key or changing provider permissions.
 
 Users can update their first and last names in **Account → Profile & settings**. Usernames are permanent. To change a recovery email, users with passwords confirm their current password, then enter the six-digit code sent to the new address. The code expires after ten minutes, and the current address stays active until the code is verified.
 

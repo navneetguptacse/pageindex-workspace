@@ -7,12 +7,12 @@ import { useEffect, useState } from "react"
 import { AccountMenu } from "@/components/account-menu"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { api, errorMessage } from "@/lib/api"
+import { api, errorMessage, type WorkspaceStatus } from "@/lib/api"
 
 export function PublicAccountNavigation() {
   const router = useRouter()
   const pathname = usePathname()
-  const [username, setUsername] = useState<string | null>(null)
+  const [profile, setProfile] = useState<WorkspaceStatus | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState("")
 
@@ -20,14 +20,14 @@ export function PublicAccountNavigation() {
     let active = true
     function clearSession() {
       active = false
-      setUsername(null)
+      setProfile(null)
     }
     void api.workspace.status().then(
       (status) => {
-        if (active) setUsername(status.username)
+        if (active) setProfile(status)
       },
       () => {
-        if (active) setUsername(null)
+        if (active) setProfile(null)
       }
     )
     window.addEventListener("pageindex:session-expired", clearSession)
@@ -53,12 +53,8 @@ export function PublicAccountNavigation() {
 
   return (
     <>
-      {username ? (
-        <AccountMenu
-          username={username}
-          pending={pending}
-          onSignOut={signOut}
-        />
+      {profile?.username ? (
+        <AccountMenu profile={profile} pending={pending} onSignOut={signOut} />
       ) : (
         <>
           <Button variant="ghost" size="sm" render={<Link href="/login" />}>

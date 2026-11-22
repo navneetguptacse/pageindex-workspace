@@ -11,7 +11,14 @@ from starlette.responses import JSONResponse
 from app import database
 from app.config import get_settings
 from app.database import SessionDep, Workspace, current_workspace
-from app.models import LoginSession, OAuthIdentity, Quota, WorkspaceUser, utc_now
+from app.models import (
+    LoginSession,
+    OAuthIdentity,
+    Quota,
+    WorkspaceAvatar,
+    WorkspaceUser,
+    utc_now,
+)
 from app.quota import increment_quota
 
 COOKIE_NAME = "pageindex_session"
@@ -200,6 +207,7 @@ class WorkspaceStatus(BaseModel):
     username: str | None = None
     first_name: str | None = None
     last_name: str | None = None
+    avatar_url: str | None = None
     email: str | None = None
     email_verified: bool = False
     has_password: bool = False
@@ -223,7 +231,17 @@ def workspace_status(
         if user
         else []
     )
+    avatar_revision = (
+        session.exec(
+            select(WorkspaceAvatar.revision).where(WorkspaceAvatar.user_id == user.id)
+        ).first()
+        if user
+        else None
+    )
     return WorkspaceStatus(
+        avatar_url=f"{WORKSPACE_API}/account/avatar?v={avatar_revision}"
+        if avatar_revision
+        else None,
         auth_required=settings.auth_required,
         username=user.username if user else None,
         first_name=user.first_name if user else None,

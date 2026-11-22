@@ -92,7 +92,7 @@ export function WorkspaceGate({ children }: { children: ReactNode }) {
             <Alert variant="destructive">
               <AlertDescription>{error}</AlertDescription>
             </Alert>
-            <Button onClick={checkSession}>Retry connection</Button>
+            <Button onClick={checkSession}>Retry</Button>
             <Button variant="ghost" render={<Link href="/" />}>
               Home
             </Button>
@@ -107,7 +107,7 @@ export function WorkspaceGate({ children }: { children: ReactNode }) {
   return (
     <SidebarProvider
       className="!min-h-dvh"
-      style={{ "--sidebar-width": "14.5rem" } as React.CSSProperties}
+      style={{ "--sidebar-width": "13rem" } as React.CSSProperties}
     >
       <a
         href="#main-content"
@@ -119,7 +119,7 @@ export function WorkspaceGate({ children }: { children: ReactNode }) {
       <SidebarInset className="min-w-0">
         <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center justify-between gap-2 border-b bg-background px-3 sm:px-5">
           <div className="flex min-w-0 items-center gap-3">
-            <SidebarTrigger aria-label="Toggle navigation" />
+            <SidebarTrigger />
             <span className="truncate font-medium">Document workspace</span>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -131,7 +131,7 @@ export function WorkspaceGate({ children }: { children: ReactNode }) {
             )}
             {status.username && (
               <AccountMenu
-                username={status.username}
+                profile={status}
                 pending={pending}
                 onSignOut={signOut}
               />

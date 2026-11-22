@@ -421,7 +421,7 @@ export function WorkspaceAuth({ view }: { view: AuthView }) {
                     className="px-0"
                     render={<Link href="/register" />}
                   >
-                    Create an account
+                    Create account
                   </Button>
                 </div>
               ) : (

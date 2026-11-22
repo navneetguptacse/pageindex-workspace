@@ -3,16 +3,33 @@ from datetime import timedelta
 from secrets import compare_digest, randbelow, token_urlsafe
 from typing import Annotated
 from urllib.parse import urlencode
+from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, delete, select
 
 from app import database
+from app.account_avatar import AVATAR_UPLOAD_LIMIT, normalize_avatar
 from app.account_email import AccountEmail, EmailDeliveryError, send_email
 from app.config import Settings, get_settings
-from app.models import EmailChange, EmailLink, LoginSession, WorkspaceUser, utc_now
+from app.models import (
+    EmailChange,
+    EmailLink,
+    LoginSession,
+    WorkspaceAvatar,
+    WorkspaceUser,
+    utc_now,
+)
 from app.workspace import (
     COOKIE_NAME,
     WORKSPACE_API,
@@ -241,6 +258,58 @@ def _active_account(
         if user is not None:
             return user
     raise HTTPException(401, "Sign in to manage your account.")
+
+
+@router.get("/account/avatar", response_class=Response)
+def account_avatar(request: Request) -> Response:
+    workspace = _account_workspace(request)
+    with Session(database.engine) as session:
+        avatar = session.get(WorkspaceAvatar, workspace.id)
+        if avatar is None:
+            raise HTTPException(404, "Profile picture not found.")
+        return Response(
+            avatar.image,
+            media_type="image/png",
+            headers={"X-Content-Type-Options": "nosniff"},
+        )
+
+
+@router.put(
+    "/account/avatar",
+    max_body_size=AVATAR_UPLOAD_LIMIT + 65536,
+    form_limits={"max_files": 1},
+)
+def save_account_avatar(
+    request: Request, photo: Annotated[UploadFile, File()]
+) -> WorkspaceStatus:
+    workspace = _account_workspace(request)
+    image = normalize_avatar(photo.file.read(AVATAR_UPLOAD_LIMIT + 1))
+    with Session(database.engine) as session:
+        database.lock_auth_transaction(session)
+        user = _active_account(
+            session, token_hash(request.cookies.get(COOKIE_NAME, "")), workspace
+        )
+        avatar = session.get(WorkspaceAvatar, user.id)
+        if avatar is None:
+            session.add(WorkspaceAvatar(user_id=user.id, image=image))
+        else:
+            avatar.image = image
+            avatar.revision = uuid4().hex
+        session.commit()
+        return workspace_status(session, user)
+
+
+@router.delete("/account/avatar")
+def delete_account_avatar(request: Request) -> WorkspaceStatus:
+    workspace = _account_workspace(request)
+    with Session(database.engine) as session:
+        database.lock_auth_transaction(session)
+        user = _active_account(
+            session, token_hash(request.cookies.get(COOKIE_NAME, "")), workspace
+        )
+        session.exec(delete(WorkspaceAvatar).where(WorkspaceAvatar.user_id == user.id))
+        session.commit()
+        return workspace_status(session, user)
 
 
 @router.patch("/account/profile")

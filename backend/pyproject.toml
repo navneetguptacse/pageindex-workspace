@@ -12,6 +12,7 @@ dependencies = [
     "litellm",
     "pageindex>=0.7.4",
     "pypdfium2",
+    "pillow",
     "pydantic-settings>=2.0",
     "python-multipart",
     "psycopg[binary]>=3.2,<4",

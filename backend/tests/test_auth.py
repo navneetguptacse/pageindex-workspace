@@ -2,12 +2,14 @@ import base64
 import hashlib
 import unittest
 from datetime import timedelta
+from io import BytesIO
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from database_support import test_engine
 from fastapi.testclient import TestClient
+from PIL import Image
 from sqlalchemy.engine import make_url
 from sqlmodel import Session, create_engine, select
 
@@ -115,6 +117,42 @@ class TestAuthentication(unittest.TestCase):
         new = self.post("signup", email="new@example.com")
         self.assertEqual(existing.json(), new.json())
         self.assertEqual(self.mail.call_count, count + 1)
+
+    def test_profile_picture_is_private_and_invalid_uploads_preserve_it(self):
+        self.register()
+        path = f"{WORKSPACE_API}/account/avatar"
+        with Image.new("RGB", (320, 200), "blue") as image, BytesIO() as data:
+            image.save(data, format="JPEG")
+            uploaded = self.client.put(
+                path, files={"photo": ("portrait.jpg", data.getvalue(), "image/jpeg")}
+            )
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        url = uploaded.json()["avatar_url"]
+        self.assertEqual(self.session()["avatar_url"], url)
+        picture = self.client.get(url)
+        self.assertEqual(picture.headers["content-type"], "image/png")
+        with Image.open(BytesIO(picture.content)) as verified:
+            self.assertEqual(verified.size, (192, 192))
+        self.assertEqual(self.new_client().get(url).status_code, 401)
+        rejected = self.client.put(
+            path, files={"photo": ("fake.png", b"not an image", "image/png")}
+        )
+        self.assertEqual(rejected.status_code, 415)
+        self.assertEqual(self.session()["avatar_url"], url)
+        other = self.new_client()
+        self.add_legacy_user()
+        self.assertEqual(
+            other.post(
+                f"{WORKSPACE_API}/login",
+                json={"username": "legacy", "password": "legacy-password"},
+            ).status_code,
+            200,
+        )
+        self.assertEqual(other.get(url).status_code, 404)
+        removed = self.client.delete(path)
+        self.assertEqual(removed.status_code, 200, removed.text)
+        self.assertIsNone(removed.json()["avatar_url"])
+        self.assertEqual(self.client.get(url).status_code, 404)
 
     def test_profile_names_are_editable_and_username_is_fixed(self):
         self.register()

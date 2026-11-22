@@ -142,65 +142,64 @@ export function WorkspaceAccount() {
         description="Manage your profile, providers, and sign-in settings."
       />
       <WorkspaceProviderSettings key={status.username} />
-      <div className="grid max-w-5xl items-start gap-4 lg:grid-cols-2">
-        <div className="grid min-w-0 gap-4">
-          <WorkspaceProfile key={status.username} status={status} />
-          {(status.oauth_providers.length > 0 ||
-            status.linked_providers.length > 0) && (
-            <Card>
-              <CardHeader>
-                <h2 className="font-semibold">Connected sign-in methods</h2>
-              </CardHeader>
-              <CardContent className="flex flex-wrap items-center gap-2">
-                {[
-                  ...new Set([
-                    ...status.oauth_providers,
-                    ...status.linked_providers,
-                  ]),
-                ].map((provider) =>
-                  status.linked_providers.includes(provider) ? (
-                    <span
-                      key={provider}
-                      className="rounded-control bg-success-surface px-2.5 py-1 text-sm text-success"
-                    >
-                      {oauthName[provider]} connected
-                    </span>
-                  ) : (
-                    <Button
-                      key={provider}
-                      variant="outline"
-                      render={
-                        <a
-                          aria-label={`Connect ${oauthName[provider]}`}
-                          href={api.workspace.oauthUrl(provider, true)}
-                        />
-                      }
-                      nativeButton={false}
-                    >
-                      Connect {oauthName[provider]}
-                    </Button>
-                  )
-                )}
-              </CardContent>
-            </Card>
-          )}
-        </div>
-        <div className="grid min-w-0 gap-4">
-          {status.has_password && <ChangePasswordForm />}
+      <div className="grid max-w-5xl gap-4 lg:grid-cols-2">
+        <WorkspaceProfile key={status.username} status={status} />
+        {status.has_password && <ChangePasswordForm />}
+        {(status.oauth_providers.length > 0 ||
+          status.linked_providers.length > 0) && (
           <Card>
             <CardHeader>
-              <h2 className="font-semibold">Sessions</h2>
+              <h2 className="font-semibold">Connected sign-in methods</h2>
               <CardDescription>
-                End every active session, including this one.
+                Manage the accounts you use to sign in.
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <Button variant="outline" onClick={() => setConfirmSignOut(true)}>
-                Sign out everywhere
-              </Button>
+            <CardContent className="mt-auto flex flex-wrap items-center gap-2">
+              {[
+                ...new Set([
+                  ...status.oauth_providers,
+                  ...status.linked_providers,
+                ]),
+              ].map((provider) =>
+                status.linked_providers.includes(provider) ? (
+                  <span
+                    key={provider}
+                    className="rounded-control bg-success-surface px-2.5 py-1 text-sm text-success"
+                  >
+                    {oauthName[provider]} connected
+                  </span>
+                ) : (
+                  <Button
+                    key={provider}
+                    variant="outline"
+                    render={
+                      <a
+                        aria-label={`Connect ${oauthName[provider]}`}
+                        href={api.workspace.oauthUrl(provider, true)}
+                      />
+                    }
+                    nativeButton={false}
+                  >
+                    Connect {oauthName[provider]}
+                  </Button>
+                )
+              )}
             </CardContent>
           </Card>
-        </div>
+        )}
+        <Card>
+          <CardHeader>
+            <h2 className="font-semibold">Sessions</h2>
+            <CardDescription>
+              End every active session, including this one.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="mt-auto">
+            <Button variant="outline" onClick={() => setConfirmSignOut(true)}>
+              Sign out everywhere
+            </Button>
+          </CardContent>
+        </Card>
       </div>
       {confirmSignOut && (
         <ConfirmAction
