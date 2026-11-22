@@ -112,6 +112,8 @@ class ExtractJob(WorkspaceRecord, table=True):
 class WorkspaceUser(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     username: str = Field(unique=True, index=True)
+    first_name: str | None = None
+    last_name: str | None = None
     password_hash: str = ""
     email: str | None = Field(default=None, unique=True, index=True)
     email_verified: bool = False
@@ -135,6 +137,16 @@ class EmailLink(SQLModel, table=True):
     user_id: str | None = Field(
         default=None, foreign_key="workspaceuser.id", ondelete="CASCADE"
     )
+    expires_at: datetime = Field(index=True)
+
+
+class EmailChange(SQLModel, table=True):
+    user_id: str = Field(
+        primary_key=True, foreign_key="workspaceuser.id", ondelete="CASCADE"
+    )
+    email: str
+    session_hash: str
+    code_hash: str
     expires_at: datetime = Field(index=True)
 
 

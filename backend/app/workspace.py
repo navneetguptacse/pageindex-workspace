@@ -198,6 +198,8 @@ class LoginRequest(BaseModel):
 class WorkspaceStatus(BaseModel):
     auth_required: bool
     username: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
     email: str | None = None
     email_verified: bool = False
     has_password: bool = False
@@ -224,6 +226,8 @@ def workspace_status(
     return WorkspaceStatus(
         auth_required=settings.auth_required,
         username=user.username if user else None,
+        first_name=user.first_name if user else None,
+        last_name=user.last_name if user else None,
         email=user.email if user else None,
         email_verified=bool(user and user.email_verified),
         has_password=bool(user and user.password_hash),

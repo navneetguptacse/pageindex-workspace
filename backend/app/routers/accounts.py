@@ -1,17 +1,18 @@
 import logging
 from datetime import timedelta
-from secrets import token_urlsafe
+from secrets import compare_digest, randbelow, token_urlsafe
+from typing import Annotated
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, delete, select
 
 from app import database
 from app.account_email import AccountEmail, EmailDeliveryError, send_email
 from app.config import Settings, get_settings
-from app.models import EmailLink, LoginSession, WorkspaceUser, utc_now
+from app.models import EmailChange, EmailLink, LoginSession, WorkspaceUser, utc_now
 from app.workspace import (
     COOKIE_NAME,
     WORKSPACE_API,
@@ -29,6 +30,16 @@ from app.workspace import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix=WORKSPACE_API, tags=["workspace"])
 EMAIL_LINK_LIFETIME = timedelta(minutes=30)
+EMAIL_CODE_LIFETIME = timedelta(minutes=10)
+PersonName = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=80,
+        pattern=r"^[^\x00-\x1f\x7f]+$",
+    ),
+]
 
 
 class EmailRequest(BaseModel):
@@ -45,7 +56,24 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=12, max_length=256)
 
 
+class ProfileNames(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    first_name: PersonName
+    last_name: PersonName
+
+
+class EmailChangeRequest(EmailRequest):
+    password: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class EmailChangeConfirmation(EmailRequest):
+    code: str = Field(pattern=r"^[0-9]{6}$")
+
+
 class SignupConfirmation(SetPasswordRequest):
+    first_name: PersonName | None = None
+    last_name: PersonName | None = None
     username: str = Field(
         min_length=3, max_length=64, pattern=r"^[a-z0-9][a-z0-9_.-]+$"
     )
@@ -179,6 +207,8 @@ def verify_signup(
             )
         user = WorkspaceUser(
             username=body.username,
+            first_name=body.first_name,
+            last_name=body.last_name,
             email=link.email,
             email_verified=True,
             password_hash=hash_password(body.password),
@@ -192,6 +222,141 @@ def verify_signup(
                 status_code=409, detail="This email or username is already in use"
             ) from exc
         return workspace_status(session, user)
+
+
+def _account_workspace(request: Request) -> database.Workspace:
+    require_auth_mode()
+    workspace = request.state.workspace
+    if workspace is None:
+        raise HTTPException(401, "Sign in to manage your account.")
+    return workspace
+
+
+def _active_account(
+    session: Session, session_hash: str, workspace: database.Workspace
+) -> WorkspaceUser:
+    login = session.get(LoginSession, session_hash)
+    if login and login.user_id == workspace.id and login.expires_at > utc_now():
+        user = session.get(WorkspaceUser, workspace.id)
+        if user is not None:
+            return user
+    raise HTTPException(401, "Sign in to manage your account.")
+
+
+@router.patch("/account/profile")
+def update_profile(body: ProfileNames, request: Request) -> WorkspaceStatus:
+    workspace = _account_workspace(request)
+    with Session(database.engine) as session:
+        database.lock_auth_transaction(session)
+        user = _active_account(
+            session, token_hash(request.cookies.get(COOKIE_NAME, "")), workspace
+        )
+        user.first_name = body.first_name
+        user.last_name = body.last_name
+        session.commit()
+        return workspace_status(session, user)
+
+
+@router.post("/account/email/change", status_code=202)
+def request_email_change(body: EmailChangeRequest, request: Request) -> dict[str, str]:
+    settings = _email_settings()
+    workspace = _account_workspace(request)
+    cookie = request.cookies.get(COOKIE_NAME, "")
+    session_hash = token_hash(cookie)
+    email = body.email.casefold()
+    code = f"{randbelow(1_000_000):06d}"
+    with Session(database.engine) as session:
+        auth_rate_limit(session, request, "email-change", workspace.id)
+        database.lock_auth_transaction(session)
+        user = _active_account(session, session_hash, workspace)
+        if user.password_hash and not valid_password(user, body.password or ""):
+            raise HTTPException(403, "Enter your current password.")
+        if email == user.email and user.email_verified:
+            raise HTTPException(409, "This is already your verified email.")
+        existing = _user_by_email(session, email)
+        if existing and existing.id != user.id:
+            raise HTTPException(409, "Choose a different email address.")
+        session.exec(delete(EmailChange).where(EmailChange.expires_at <= utc_now()))
+        change = session.get(EmailChange, workspace.id) or EmailChange(
+            user_id=workspace.id
+        )
+        change.email = email
+        change.session_hash = session_hash
+        change.code_hash = token_hash(f"{cookie}:{code}")
+        change.expires_at = utc_now() + EMAIL_CODE_LIFETIME
+        session.add(change)
+        session.commit()
+
+    try:
+        send_email(
+            settings,
+            email,
+            AccountEmail(
+                "Verify your new PageIndex email",
+                f"Your PageIndex verification code is {code}.\n\nIt expires in 10 minutes.",
+            ),
+        )
+    except EmailDeliveryError:
+        logger.warning("Could not deliver an email change verification code")
+        raise HTTPException(
+            503, "Could not send the verification code. Try again."
+        ) from None
+    return {"message": "Verification code sent. Check your new email."}
+
+
+@router.post("/account/email/confirm")
+def confirm_email_change(
+    body: EmailChangeConfirmation, request: Request, background: BackgroundTasks
+) -> WorkspaceStatus:
+    workspace = _account_workspace(request)
+    cookie = request.cookies.get(COOKIE_NAME, "")
+    session_hash = token_hash(cookie)
+    with Session(database.engine) as session:
+        auth_rate_limit(session, request, "email-code", workspace.id, limit=5)
+        database.lock_auth_transaction(session)
+        user = _active_account(session, session_hash, workspace)
+        change = session.get(EmailChange, workspace.id)
+        if (
+            change is None
+            or change.session_hash != session_hash
+            or change.email != body.email.casefold()
+            or change.expires_at <= utc_now()
+            or not compare_digest(change.code_hash, token_hash(f"{cookie}:{body.code}"))
+        ):
+            raise HTTPException(
+                400, "The code is invalid or expired. Request a new code if needed."
+            )
+        existing = _user_by_email(session, change.email)
+        if existing and existing.id != user.id:
+            raise HTTPException(409, "Choose a different email address.")
+        previous_email = user.email if user.email_verified else None
+        user.email = change.email
+        user.email_verified = True
+        session.delete(change)
+        session.exec(
+            delete(EmailLink).where(
+                EmailLink.user_id == user.id,
+                EmailLink.purpose.in_(("verify-email", "reset-password")),
+            )
+        )
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            raise HTTPException(409, "Choose a different email address.") from exc
+        result = workspace_status(session, user)
+
+    settings = get_settings()
+    if previous_email and previous_email != result.email and settings.email_enabled:
+        background.add_task(
+            _deliver,
+            settings,
+            previous_email,
+            AccountEmail(
+                "Your PageIndex email changed",
+                "The verified email on your PageIndex account was changed.",
+            ),
+        )
+    return result
 
 
 @router.post("/account/email", status_code=202)
@@ -232,6 +397,7 @@ def add_email(
 def verify_email(body: EmailVerification) -> dict[str, str]:
     require_auth_mode()
     with Session(database.engine) as session:
+        database.lock_auth_transaction(session)
         link = _take_link(session, "verify-email", body.token)
         user = session.get(WorkspaceUser, link.user_id)
         if user is None or user.email_verified or _user_by_email(session, link.email):
@@ -283,6 +449,7 @@ def _revoke_sessions(session: Session, user_id: str) -> None:
 def _replace_password(session: Session, user: WorkspaceUser, password: str) -> None:
     user.password_hash = hash_password(password)
     _revoke_sessions(session, user.id)
+    session.exec(delete(EmailChange).where(EmailChange.user_id == user.id))
     session.exec(
         delete(EmailLink).where(
             EmailLink.user_id == user.id, EmailLink.purpose == "reset-password"

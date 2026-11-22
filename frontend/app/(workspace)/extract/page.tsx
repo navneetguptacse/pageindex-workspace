@@ -54,6 +54,7 @@ import {
   ErrorNotice,
   LoadingRows,
   PageHeader,
+  ProcessingErrorText,
   ResourceStatus,
   WorkspacePanel,
 } from "@/components/workspace-ui"
@@ -365,7 +366,9 @@ function ExtractWorkspace({ doc }: { doc: string | null }) {
                   </span>
                 </div>
                 {current.processing_error && (
-                  <ErrorNotice>{current.processing_error}</ErrorNotice>
+                  <ErrorNotice>
+                    <ProcessingErrorText message={current.processing_error} />
+                  </ErrorNotice>
                 )}
                 {extractionIsPending(current) && (
                   <p role="status" className="text-sm text-muted-foreground">

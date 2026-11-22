@@ -33,6 +33,7 @@ from app.models import (
     utc_now,
 )
 from app.pageindex_clients import provider_key
+from app.provider_checks import verify_chat, verify_pageindex
 from app.quota import reserve_chat_tokens, settle_chat_tokens
 from app.work_queue import process_next
 from app.workspace import hash_password
@@ -58,6 +59,10 @@ class TestWorkspace(unittest.TestCase):
             "main",
         ):
             self.enterContext(patch(f"{name}.get_settings", return_value=settings))
+        self.verify_pageindex = self.enterContext(
+            patch("app.provider_settings.verify_pageindex")
+        )
+        self.verify_chat = self.enterContext(patch("app.provider_settings.verify_chat"))
         self.engine = test_engine(self, f"sqlite:///{directory}/app.db")
         self.enterContext(patch.object(database, "engine", self.engine))
         self.enterContext(patch.object(database, "database_url", self.engine.url))
@@ -135,6 +140,75 @@ class TestWorkspace(unittest.TestCase):
             self.assertFalse(session.get(ChatSession, self.other_session_id).is_deleted)
         self.assertEqual(self.client.post("/api/v1/workspace/logout").status_code, 204)
         self.assertEqual(self.client.get("/api/v1/documents/").status_code, 401)
+
+    def test_provider_checks_reject_invalid_replacements_and_can_retest_saved_keys(
+        self,
+    ):
+        endpoint = "/api/v1/workspace/account/providers"
+        self.assertEqual(self.client.post(f"{endpoint}/chat/test").status_code, 401)
+        self.login()
+        self.verify_pageindex.side_effect = verify_pageindex
+        self.verify_chat.side_effect = verify_chat
+        pageindex = MagicMock()
+        chat = MagicMock()
+        with (
+            patch("pageindex.PageIndexClient", return_value=pageindex) as factory,
+            patch.dict(sys.modules, {"litellm": SimpleNamespace(completion=chat)}),
+        ):
+            saved = self.client.patch(
+                endpoint,
+                json={
+                    "pageindex_api_key": "test-pageindex-key",
+                    "chat": {
+                        "provider": "openai",
+                        "model": "valid-model",
+                        "api_key": "test-chat-key",
+                    },
+                },
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+            factory.assert_called_with(index={"api_key": "test-pageindex-key"})
+            pageindex.list_documents.assert_called_with(limit=1)
+            self.assertEqual(chat.call_args.kwargs["model"], "openai/valid-model")
+            self.assertEqual(chat.call_args.kwargs["api_key"], "test-chat-key")
+
+            pageindex.list_documents.side_effect = PageIndexAPIError(
+                "bad-secret", status_code=401
+            )
+            failed = self.client.patch(
+                endpoint, json={"pageindex_api_key": "bad-secret"}
+            )
+            self.assertEqual(failed.status_code, 422, failed.text)
+            self.assertIn("PageIndex rejected the API key", failed.text)
+            self.assertNotIn("bad-secret", failed.text)
+            pageindex.list_documents.side_effect = None
+            self.assertEqual(
+                self.client.post(f"{endpoint}/pageindex/test").status_code, 204
+            )
+            factory.assert_called_with(index={"api_key": "test-pageindex-key"})
+
+            chat.side_effect = PageIndexAPIError(
+                "private provider payload", status_code=404
+            )
+            failed = self.client.patch(
+                endpoint,
+                json={"chat": {"provider": "openai", "model": "missing-model"}},
+            )
+            self.assertEqual(failed.status_code, 422, failed.text)
+            self.assertIn("Check the model ID", failed.text)
+            self.assertNotIn("private provider payload", failed.text)
+            self.assertEqual(chat.call_args.kwargs["api_key"], "test-chat-key")
+            self.assertEqual(
+                self.client.get(endpoint).json()["chat_model"], "valid-model"
+            )
+
+            chat.side_effect = TimeoutError()
+            response = self.client.post(f"{endpoint}/chat/test")
+            self.assertEqual(response.status_code, 503, response.text)
+            self.assertIn("Could not verify", response.text)
+            chat.side_effect = None
+            self.assertEqual(self.client.post(f"{endpoint}/chat/test").status_code, 204)
+            self.assertEqual(chat.call_args.kwargs["model"], "openai/valid-model")
 
     def test_provider_credentials_are_private_and_write_only(self):
         path = "/api/v1/workspace/account/providers"

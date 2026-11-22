@@ -167,9 +167,16 @@ export interface ProviderSettingsUpdate {
   chat?: { provider: ChatProvider; model: string; api_key?: string } | null
 }
 
+export interface ProfileNames {
+  first_name: string
+  last_name: string
+}
+
 export interface WorkspaceStatus {
   auth_required: boolean
   username: string | null
+  first_name: string | null
+  last_name: string | null
   email: string | null
   email_verified: boolean
   has_password: boolean
@@ -273,6 +280,8 @@ export const api = {
   workspace: {
     status: () => request<WorkspaceStatus>("/workspace/session"),
     providers: () => request<ProviderSettings>("/workspace/account/providers"),
+    testProvider: (connection: "pageindex" | "chat") =>
+      post<void>(`/workspace/account/providers/${connection}/test`, {}),
     updateProviders: (settings: ProviderSettingsUpdate) =>
       request<ProviderSettings>("/workspace/account/providers", {
         method: "PATCH",
@@ -291,11 +300,17 @@ export const api = {
     logout: () => post<void>("/workspace/logout", {}),
     signup: (email: string) =>
       post<{ message: string }>("/workspace/signup", { email }),
-    verifySignup: (token: string, username: string, password: string) =>
+    verifySignup: (
+      token: string,
+      username: string,
+      password: string,
+      names: ProfileNames
+    ) =>
       post<WorkspaceStatus>("/workspace/verify-signup", {
         token,
         username,
         password,
+        ...names,
       }),
     verifyEmail: (token: string) =>
       post<{ message: string }>("/workspace/verify-email", { token }),
@@ -306,10 +321,21 @@ export const api = {
         token,
         password,
       }),
-    addEmail: (email: string, password: string) =>
-      post<{ message: string }>("/workspace/account/email", {
+    updateProfile: (names: ProfileNames) =>
+      request<WorkspaceStatus>("/workspace/account/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(names),
+      }),
+    requestEmailChange: (email: string, password?: string) =>
+      post<{ message: string }>("/workspace/account/email/change", {
         email,
         password,
+      }),
+    confirmEmailChange: (email: string, code: string) =>
+      post<WorkspaceStatus>("/workspace/account/email/confirm", {
+        email,
+        code,
       }),
     oauthUrl: (provider: OAuthProvider, link = false) =>
       `/api/v1/workspace/oauth/${provider}${link ? "?link=true" : ""}`,

@@ -11,6 +11,7 @@ import {
   type FormEvent,
 } from "react"
 
+import { ProfileNameFields } from "@/components/workspace-profile"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -19,7 +20,12 @@ import {
   CardDescription,
   CardHeader,
 } from "@/components/ui/card"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import {
@@ -211,7 +217,11 @@ export function WorkspaceAuth({ view }: { view: AuthView }) {
           await api.workspace.verifySignup(
             token,
             username.trim().toLowerCase(),
-            password
+            password,
+            {
+              first_name: String(data.get("first_name") ?? "").trim(),
+              last_name: String(data.get("last_name") ?? "").trim(),
+            }
           )
           clearHash()
           router.replace("/workspace")
@@ -282,6 +292,7 @@ export function WorkspaceAuth({ view }: { view: AuthView }) {
               {showForm && (
                 <form onSubmit={submit}>
                   <FieldGroup>
+                    {completing && <ProfileNameFields />}
                     {(view === "login" || completing) && (
                       <Field>
                         <FieldLabel htmlFor="auth-username">
@@ -297,6 +308,11 @@ export function WorkspaceAuth({ view }: { view: AuthView }) {
                           minLength={completing ? 3 : undefined}
                           maxLength={completing ? 64 : 254}
                         />
+                        {completing && (
+                          <FieldDescription>
+                            Your username is permanent.
+                          </FieldDescription>
+                        )}
                       </Field>
                     )}
                     {(view === "signup" || view === "forgot") && (

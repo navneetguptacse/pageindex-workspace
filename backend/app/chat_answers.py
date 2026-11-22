@@ -14,6 +14,7 @@ from app.chat_context import Prompt, estimated_tokens
 from app.config import Settings
 from app.document_storage import pdf_page_count
 from app.pageindex_clients import get_search_client
+from app.provider_checks import chat_provider_failure
 from app.quota import reserve_chat_tokens, settle_chat_tokens
 
 SOURCE_MARKER = re.compile(r"\[source\s+(\d+)\]", re.IGNORECASE)
@@ -282,7 +283,7 @@ def scoped_answer(
         except Exception as exc:
             if getattr(exc, "status_code", None) in {400, 401, 403, 404, 422, 429}:
                 settle_chat_tokens(session, reservation, 0)
-            raise
+            raise chat_provider_failure(model, exc) from None
         reported_usage = getattr(reply, "usage", None)
         counts = reported_usage.model_dump() if reported_usage else None
         actual = token_usage(counts) or {}

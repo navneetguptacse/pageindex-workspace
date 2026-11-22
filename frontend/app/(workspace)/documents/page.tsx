@@ -49,6 +49,7 @@ import {
   ErrorNotice,
   LoadingRows,
   PageHeader,
+  ProcessingErrorText,
   ResourceStatus,
   WorkspacePanel,
 } from "@/components/workspace-ui"
@@ -244,7 +245,9 @@ export default function DocumentsPage() {
                       </div>
                       {file.processing_error && (
                         <div className="text-xs text-destructive">
-                          {file.processing_error}
+                          <ProcessingErrorText
+                            message={file.processing_error}
+                          />
                         </div>
                       )}
                     </div>

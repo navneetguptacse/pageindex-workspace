@@ -1,3 +1,4 @@
+import Link from "next/link"
 import type { ReactNode } from "react"
 import { CircleAlertIcon } from "lucide-react"
 
@@ -39,6 +40,24 @@ export function ErrorNotice({ children }: { children: ReactNode }) {
       <CircleAlertIcon aria-hidden="true" />
       <AlertDescription>{children}</AlertDescription>
     </Alert>
+  )
+}
+
+export function ProcessingErrorText({ message }: { message: string }) {
+  const [before, label, ...after] = message.split(/(provider settings)/i)
+  if (!label) return message
+
+  return (
+    <>
+      {before}
+      <Link
+        href="/account#provider-settings"
+        className="rounded-sm font-semibold control-focus"
+      >
+        {label}
+      </Link>
+      {after.join("")}
+    </>
   )
 }
 

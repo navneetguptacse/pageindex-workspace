@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 
 import { ConfirmAction } from "@/components/confirm-action"
 import { WorkspaceStatusContext } from "@/components/workspace-gate"
+import { WorkspaceProfile } from "@/components/workspace-profile"
 import { WorkspaceProviderSettings } from "@/components/workspace-provider-settings"
 import { oauthName } from "@/components/workspace-auth"
 import {
@@ -12,7 +13,6 @@ import {
   PageHeader,
   WorkspacePanel,
 } from "@/components/workspace-ui"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -24,77 +24,6 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { api, errorMessage } from "@/lib/api"
-
-function RecoveryEmailForm() {
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState("")
-  const [message, setMessage] = useState("")
-
-  async function addEmail(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const form = event.currentTarget
-    const data = new FormData(form)
-    setError("")
-    setMessage("")
-    setPending(true)
-    try {
-      const response = await api.workspace.addEmail(
-        String(data.get("email")),
-        String(data.get("password"))
-      )
-      form.reset()
-      setMessage(response.message)
-    } catch (error) {
-      setError(errorMessage(error))
-    } finally {
-      setPending(false)
-    }
-  }
-
-  return (
-    <form onSubmit={addEmail}>
-      <FieldGroup>
-        <Field>
-          <FieldLabel htmlFor="account-email">Recovery email</FieldLabel>
-          <Input
-            id="account-email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            required
-            maxLength={254}
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="recovery-password">Current password</FieldLabel>
-          <Input
-            id="recovery-password"
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            required
-            maxLength={256}
-          />
-        </Field>
-        {error && <ErrorNotice>{error}</ErrorNotice>}
-        {message && (
-          <Alert role="status">
-            <AlertDescription>{message}</AlertDescription>
-          </Alert>
-        )}
-        <Button
-          type="submit"
-          variant="outline"
-          className="self-start"
-          disabled={pending}
-        >
-          {pending && <Spinner data-icon="inline-start" />}
-          Send verification email
-        </Button>
-      </FieldGroup>
-    </form>
-  )
-}
 
 function ChangePasswordForm() {
   const router = useRouter()
@@ -215,30 +144,7 @@ export function WorkspaceAccount() {
       <WorkspaceProviderSettings key={status.username} />
       <div className="grid max-w-5xl items-start gap-4 lg:grid-cols-2">
         <div className="grid min-w-0 gap-4">
-          <Card>
-            <CardHeader>
-              <h2 className="font-semibold">Profile</h2>
-            </CardHeader>
-            <CardContent className="grid gap-4">
-              <dl className="grid gap-3 text-sm">
-                <div>
-                  <dt className="text-muted-foreground">Username</dt>
-                  <dd className="font-medium break-all">{status.username}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Recovery email</dt>
-                  <dd className="font-medium break-all">
-                    {status.email_verified
-                      ? `${status.email} · Verified`
-                      : "No verified email"}
-                  </dd>
-                </div>
-              </dl>
-              {status.email_enabled &&
-                status.has_password &&
-                !status.email_verified && <RecoveryEmailForm />}
-            </CardContent>
-          </Card>
+          <WorkspaceProfile key={status.username} status={status} />
           {(status.oauth_providers.length > 0 ||
             status.linked_providers.length > 0) && (
             <Card>

@@ -537,42 +537,40 @@ function ChatWorkspace() {
             className="shrink-0 border-t px-3 py-3 sm:px-5"
             onSubmit={submit}
           >
-            {chat.error && (
-              <div className="mb-2">
-                <ErrorNotice>{chat.error}</ErrorNotice>
-              </div>
-            )}
-            <InputGroup variant="composer" className="mx-auto max-w-3xl">
-              <Textarea
-                ref={composer}
-                rows={2}
-                aria-label="Ask a question"
-                placeholder="Ask a question about your PDFs…"
-                value={draft}
-                maxLength={4000}
-                disabled={generating || chat.loadingHistory}
-                variant="composer"
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === "Enter" &&
-                    !event.shiftKey &&
-                    !event.nativeEvent.isComposing
-                  ) {
-                    event.preventDefault()
-                    event.currentTarget.form?.requestSubmit()
-                  }
-                }}
-              />
-              <Button
-                type="submit"
-                size="icon-lg"
-                aria-label="Send question"
-                disabled={!draft.trim() || generating || chat.loadingHistory}
-              >
-                <ArrowUpIcon />
-              </Button>
-            </InputGroup>
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
+              {chat.error && <ErrorNotice>{chat.error}</ErrorNotice>}
+              <InputGroup variant="composer">
+                <Textarea
+                  ref={composer}
+                  rows={2}
+                  aria-label="Ask a question"
+                  placeholder="Ask a question about your PDFs…"
+                  value={draft}
+                  maxLength={4000}
+                  disabled={generating || chat.loadingHistory}
+                  variant="composer"
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      !event.shiftKey &&
+                      !event.nativeEvent.isComposing
+                    ) {
+                      event.preventDefault()
+                      event.currentTarget.form?.requestSubmit()
+                    }
+                  }}
+                />
+                <Button
+                  type="submit"
+                  size="icon-lg"
+                  aria-label="Send question"
+                  disabled={!draft.trim() || generating || chat.loadingHistory}
+                >
+                  <ArrowUpIcon />
+                </Button>
+              </InputGroup>
+            </div>
           </form>
         </section>
       </div>

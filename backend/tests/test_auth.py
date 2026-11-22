@@ -9,11 +9,11 @@ from urllib.parse import parse_qs, urlsplit
 from database_support import test_engine
 from fastapi.testclient import TestClient
 from sqlalchemy.engine import make_url
-from sqlmodel import Session, create_engine
+from sqlmodel import Session, create_engine, select
 
 from app import database
 from app.config import Settings
-from app.models import EmailLink, WorkspaceUser, utc_now
+from app.models import EmailChange, EmailLink, WorkspaceUser, utc_now
 from app.oauth_providers import Identity
 from app.workspace import COOKIE_NAME, WORKSPACE_API, hash_password, token_hash
 from main import app
@@ -79,7 +79,12 @@ class TestAuthentication(unittest.TestCase):
         )
         token = self.email_token("signup")
         response = self.post(
-            "verify-signup", token=token, username="alice", password="initial-password"
+            "verify-signup",
+            token=token,
+            username="alice",
+            password="initial-password",
+            first_name="Alice",
+            last_name="Example",
         )
         self.assertEqual(response.status_code, 201, response.text)
         self.assertEqual(response.json()["email"], "alice@example.com")
@@ -110,6 +115,102 @@ class TestAuthentication(unittest.TestCase):
         new = self.post("signup", email="new@example.com")
         self.assertEqual(existing.json(), new.json())
         self.assertEqual(self.mail.call_count, count + 1)
+
+    def test_profile_names_are_editable_and_username_is_fixed(self):
+        self.register()
+        self.assertEqual(self.session()["first_name"], "Alice")
+        self.assertEqual(self.session()["last_name"], "Example")
+        path = f"{WORKSPACE_API}/account/profile"
+        names = {"first_name": " Alice  ", "last_name": " Updated "}
+        response = self.client.patch(path, json={**names, "username": "different"})
+        self.assertEqual(response.status_code, 422)
+        response = self.client.patch(path, json=names)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["username"], "alice")
+        self.assertEqual(self.session()["last_name"], "Updated")
+
+    def test_email_changes_only_after_session_bound_one_time_code(self):
+        self.register()
+        other = self.new_client()
+        self.assertEqual(
+            other.post(
+                f"{WORKSPACE_API}/login",
+                json={
+                    "username": "alice",
+                    "password": "initial-password",
+                },
+            ).status_code,
+            200,
+        )
+        self.post("forgot-password", email="alice@example.com")
+        old_reset = self.email_token("reset-password")
+        email = "updated@example.com"
+        self.assertEqual(
+            self.post("account/email/change", email=email).status_code, 403
+        )
+        with patch("app.routers.accounts.randbelow", return_value=12345):
+            request = self.post(
+                "account/email/change", email=email, password="initial-password"
+            )
+        self.assertEqual(request.status_code, 202, request.text)
+        self.assertNotIn("012345", request.text)
+        self.assertEqual(self.mail.call_args.args[1], email)
+        self.assertIn("012345", self.mail.call_args.args[2].text)
+        self.assertEqual(self.session()["email"], "alice@example.com")
+        with Session(self.engine) as session:
+            self.assertEqual(len(session.exec(select(EmailChange)).one().code_hash), 64)
+        self.assertEqual(
+            other.post(
+                f"{WORKSPACE_API}/account/email/confirm",
+                json={
+                    "email": email,
+                    "code": "012345",
+                },
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.post("account/email/confirm", email=email, code="111111").status_code,
+            400,
+        )
+        verified = self.post("account/email/confirm", email=email, code="012345")
+        self.assertEqual(verified.status_code, 200, verified.text)
+        self.assertEqual(verified.json()["email"], email)
+        self.assertTrue(verified.json()["email_verified"])
+        self.assertEqual(self.mail.call_args.args[1], "alice@example.com")
+        self.assertEqual(
+            self.post("account/email/confirm", email=email, code="012345").status_code,
+            400,
+        )
+        self.assertEqual(
+            self.post(
+                "reset-password", token=old_reset, password="updated-password"
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.post("login", username=email, password="initial-password").status_code,
+            200,
+        )
+
+    def test_email_change_code_expires(self):
+        self.register()
+        with patch("app.routers.accounts.randbelow", return_value=615234):
+            result = self.post(
+                "account/email/change",
+                email="later@example.com",
+                password="initial-password",
+            )
+        self.assertEqual(result.status_code, 202)
+        with patch(
+            "app.routers.accounts.utc_now",
+            return_value=utc_now() + timedelta(minutes=11),
+        ):
+            response = self.post(
+                "account/email/confirm", email="later@example.com", code="615234"
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.session()["email"], "alice@example.com")
 
     def test_reset_revokes_sessions_and_pending_links(self):
         self.register()

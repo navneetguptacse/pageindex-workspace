@@ -44,11 +44,12 @@ const providers: { value: ChatProvider; label: string }[] = [
 ]
 
 type Connection = "pageindex" | "chat"
+type Pending = { connection: Connection; action: "save" | "test" | "remove" }
 const connectionLabels = { pageindex: "PageIndex", chat: "chat" }
 
 export function WorkspaceProviderSettings() {
   const settings = useResource(api.workspace.providers)
-  const [pending, setPending] = useState<Connection>()
+  const [pending, setPending] = useState<Pending>()
   const [notice, setNotice] = useState("")
   const [error, setError] = useState("")
   const [removing, setRemoving] = useState<Connection>()
@@ -57,9 +58,10 @@ export function WorkspaceProviderSettings() {
   async function update(
     connection: Connection,
     changes: ProviderSettingsUpdate,
-    message: string
+    message: string,
+    action: "save" | "remove"
   ) {
-    setPending(connection)
+    setPending({ connection, action })
     setError("")
     setNotice("")
     try {
@@ -78,11 +80,36 @@ export function WorkspaceProviderSettings() {
   ) {
     const form = event.currentTarget
     try {
-      await update(connection, changes, "Provider settings saved.")
+      await update(
+        connection,
+        changes,
+        connection === "pageindex"
+          ? "PageIndex key verified and saved."
+          : "Chat key and model verified and saved.",
+        "save"
+      )
       const key = form.elements.namedItem("apiKey")
       if (key instanceof HTMLInputElement) key.value = ""
     } catch (error) {
       setError(errorMessage(error))
+    }
+  }
+
+  async function testConnection(connection: Connection) {
+    setPending({ connection, action: "test" })
+    setError("")
+    setNotice("")
+    try {
+      await api.workspace.testProvider(connection)
+      setNotice(
+        connection === "pageindex"
+          ? "PageIndex connection verified."
+          : "Saved chat key and model verified."
+      )
+    } catch (error) {
+      setError(errorMessage(error))
+    } finally {
+      setPending(undefined)
     }
   }
 
@@ -147,6 +174,7 @@ export function WorkspaceProviderSettings() {
                   connection="pageindex"
                   configured={saved.pageindex_configured}
                   pending={pending}
+                  onTest={testConnection}
                   onRemove={setRemoving}
                 />
               </FieldGroup>
@@ -156,6 +184,7 @@ export function WorkspaceProviderSettings() {
               saved={saved}
               pending={pending}
               onSave={save}
+              onTest={testConnection}
               onRemove={setRemoving}
             />
           </div>
@@ -182,7 +211,8 @@ export function WorkspaceProviderSettings() {
               removing === "pageindex"
                 ? { pageindex_api_key: null }
                 : { chat: null },
-              "Credentials removed."
+              "Credentials removed.",
+              "remove"
             )
           }
           onClose={() => setRemoving(undefined)}
@@ -196,15 +226,17 @@ function ChatSettingsForm({
   saved,
   pending,
   onSave,
+  onTest,
   onRemove,
 }: {
   saved: ProviderSettings
-  pending?: Connection
+  pending?: Pending
   onSave: (
     event: FormEvent<HTMLFormElement>,
     connection: Connection,
     changes: ProviderSettingsUpdate
   ) => Promise<void>
+  onTest: (connection: Connection) => void
   onRemove: (connection: Connection) => void
 }) {
   const [provider, setProvider] = useState<ChatProvider | null>(
@@ -278,16 +310,17 @@ function ChatSettingsForm({
             maxLength={4096}
             disabled={Boolean(pending)}
           />
-          {keepKey && (
-            <FieldDescription>
-              Leave blank to keep the saved key.
-            </FieldDescription>
-          )}
+          <FieldDescription>
+            {keepKey && "Leave blank to keep the saved key. "}
+            Saving or testing sends a short prompt that may use provider
+            credits.
+          </FieldDescription>
         </Field>
         <ConnectionActions
           connection="chat"
           configured={saved.chat_configured}
           pending={pending}
+          onTest={onTest}
           onRemove={onRemove}
         />
       </FieldGroup>
@@ -305,9 +338,7 @@ function ConnectionTitle({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <h3 className="text-sm font-semibold">{title}</h3>
-      <Badge variant={configured ? "success" : "secondary"}>
-        {configured ? "Configured" : "Setup needed"}
-      </Badge>
+      <Badge variant="secondary">{configured ? "Saved" : "Setup needed"}</Badge>
     </div>
   )
 }
@@ -316,30 +347,46 @@ function ConnectionActions({
   connection,
   configured,
   pending,
+  onTest,
   onRemove,
 }: {
   connection: Connection
   configured: boolean
-  pending?: Connection
+  pending?: Pending
+  onTest: (connection: Connection) => void
   onRemove: (connection: Connection) => void
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button type="submit" disabled={Boolean(pending)}>
-        {pending === connection && <Spinner data-icon="inline-start" />}
+        {pending?.connection === connection && pending.action === "save" && (
+          <Spinner data-icon="inline-start" />
+        )}
         {connection === "pageindex"
           ? "Save PageIndex key"
           : "Save chat settings"}
       </Button>
       {configured && (
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => onRemove(connection)}
-          disabled={Boolean(pending)}
-        >
-          Remove key
-        </Button>
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onTest(connection)}
+            disabled={Boolean(pending)}
+          >
+            {pending?.connection === connection &&
+              pending.action === "test" && <Spinner data-icon="inline-start" />}
+            Test saved connection
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => onRemove(connection)}
+            disabled={Boolean(pending)}
+          >
+            Remove key
+          </Button>
+        </>
       )}
     </div>
   )

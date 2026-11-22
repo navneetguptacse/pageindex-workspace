@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from app.config import get_settings
 from app.database import current_workspace
+from app.provider_checks import provider_failure
 from app.provider_settings import workspace_pageindex_key
 
 if TYPE_CHECKING:
@@ -31,6 +32,8 @@ def provider_request(operation: str, *, missing_ok: bool = False) -> Iterator[No
             logger.exception("PageIndex %s failed", operation)
         else:
             logger.warning("Workspace %s failed (%s)", operation, type(exc).__name__)
+            if getattr(exc, "status_code", None) in {401, 402, 403, 429}:
+                raise provider_failure("PageIndex", exc) from None
         raise HTTPException(
             status_code=502, detail=f"PageIndex {operation} failed"
         ) from exc

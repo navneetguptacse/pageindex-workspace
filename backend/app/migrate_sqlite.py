@@ -11,9 +11,14 @@ from sqlmodel import SQLModel, select
 
 from app.config import get_settings
 from app.database import build_engine, engine, initialize_database
-from app.models import EmailLink, LoginSession, OAuthFlow, WorkItem
+from app.models import EmailChange, EmailLink, LoginSession, OAuthFlow, WorkItem
 
-TRANSIENT_TABLES = {EmailLink.__table__, LoginSession.__table__, OAuthFlow.__table__}
+TRANSIENT_TABLES = {
+    EmailChange.__table__,
+    EmailLink.__table__,
+    LoginSession.__table__,
+    OAuthFlow.__table__,
+}
 
 
 def copy_pdfs(source: Path, destination: Path) -> int:

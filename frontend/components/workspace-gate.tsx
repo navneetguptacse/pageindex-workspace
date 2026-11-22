@@ -7,7 +7,9 @@ import {
   useCallback,
   useEffect,
   useState,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react"
 
 import { api, errorMessage, type WorkspaceStatus } from "@/lib/api"
@@ -26,6 +28,10 @@ import { Spinner } from "@/components/ui/spinner"
 export const WorkspaceStatusContext = createContext<WorkspaceStatus | null>(
   null
 )
+
+export const WorkspaceStatusUpdateContext = createContext<
+  Dispatch<SetStateAction<WorkspaceStatus | null>>
+>(() => {})
 
 export function WorkspaceGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<WorkspaceStatus | null>(null)
@@ -142,7 +148,9 @@ export function WorkspaceGate({ children }: { children: ReactNode }) {
             </Alert>
           )}
           <WorkspaceStatusContext.Provider value={status}>
-            {children}
+            <WorkspaceStatusUpdateContext.Provider value={setStatus}>
+              {children}
+            </WorkspaceStatusUpdateContext.Provider>
           </WorkspaceStatusContext.Provider>
         </main>
       </SidebarInset>

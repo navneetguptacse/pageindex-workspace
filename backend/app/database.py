@@ -108,6 +108,9 @@ def lock_auth_transaction(session: Session) -> None:
         connection.exec_driver_sql("SELECT pg_advisory_xact_lock(764312801)")
 
 
+WORKSPACE_NAME_COLUMNS = ("first_name", "last_name")
+
+
 LEGACY_SQLITE_COLUMNS = {
     Document.__tablename__: (
         ("original_filename", "VARCHAR"),
@@ -132,6 +135,7 @@ LEGACY_SQLITE_COLUMNS = {
     WorkspaceUser.__tablename__: (
         ("email", "VARCHAR"),
         ("email_verified", "BOOLEAN NOT NULL DEFAULT 0"),
+        *((name, "VARCHAR") for name in WORKSPACE_NAME_COLUMNS),
     ),
 }
 
@@ -141,6 +145,10 @@ def initialize_database(target: Engine) -> None:
         if target.dialect.name == "postgresql":
             connection.exec_driver_sql("SELECT pg_advisory_xact_lock(764312800)")
             SQLModel.metadata.create_all(connection)
+            for name in WORKSPACE_NAME_COLUMNS:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE {WorkspaceUser.__tablename__} ADD COLUMN IF NOT EXISTS {name} VARCHAR"
+                )
             return
         connection.exec_driver_sql("BEGIN IMMEDIATE")
         SQLModel.metadata.create_all(connection)
