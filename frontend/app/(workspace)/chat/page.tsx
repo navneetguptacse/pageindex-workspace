@@ -422,37 +422,41 @@ function ChatWorkspace() {
           aria-label="Conversation"
           className="flex h-[max(30rem,calc(100dvh-14rem))] min-w-0 flex-col rounded-surface border bg-card sm:h-[max(32rem,calc(100dvh-12rem))]"
         >
-          <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2.5 sm:px-5">
-            <label
-              htmlFor="chat-scope"
-              className="shrink-0 text-sm font-medium"
-            >
-              Sources
-            </label>
-            <Select
-              items={scopeItems}
-              value={chat.scope}
-              onValueChange={(value) => {
-                if (value) newChat(value as Scope)
-              }}
-              disabled={generating || chat.loadingHistory}
-            >
-              <SelectTrigger
-                id="chat-scope"
-                className="w-full max-w-72 min-w-0"
+          <div className="flex shrink-0 items-center border-b px-3 py-2.5">
+            <div className="flex h-9 w-full max-w-sm items-center overflow-hidden rounded-md border border-input">
+              <label
+                htmlFor="chat-scope"
+                className="flex h-full shrink-0 items-center border-r border-input px-3 text-sm font-medium"
               >
-                <SelectValue placeholder="Choose sources" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {scopeItems.map(({ value, label }) => (
-                    <SelectItem value={value} key={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+                Sources
+              </label>
+
+              <Select
+                items={scopeItems}
+                value={chat.scope}
+                onValueChange={(value) => {
+                  if (value) newChat(value as Scope)
+                }}
+                disabled={generating || chat.loadingHistory}
+              >
+                <SelectTrigger
+                  id="chat-scope"
+                  className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent"
+                >
+                  <SelectValue placeholder="Choose sources" />
+                </SelectTrigger>
+
+                <SelectContent>
+                  <SelectGroup>
+                    {scopeItems.map(({ value, label }) => (
+                      <SelectItem value={value} key={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <MessageScrollerProvider
@@ -550,13 +554,11 @@ function ChatWorkspace() {
             </MessageScroller>
           </MessageScrollerProvider>
 
-          <form
-            className="shrink-0 border-t px-3 py-3 sm:px-5"
-            onSubmit={submit}
-          >
-            <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
+          <form className="w-full shrink-0 border-t p-3" onSubmit={submit}>
+            <div className="flex w-full flex-col gap-2">
               {chat.error && <ErrorNotice>{chat.error}</ErrorNotice>}
-              <InputGroup variant="composer">
+
+              <InputGroup variant="composer" className="w-full">
                 <Textarea
                   ref={composer}
                   rows={2}
@@ -578,6 +580,7 @@ function ChatWorkspace() {
                     }
                   }}
                 />
+
                 <Button
                   type="submit"
                   size="icon-lg"
