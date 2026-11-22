@@ -13,7 +13,9 @@ import { api, errorMessage, type Document } from "@/lib/api"
 import { documentIsPending, formatBytes, formatDate } from "@/lib/format"
 import { useResource } from "@/hooks/use-resource"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Card, CardContent } from "@/components/ui/card"
+import { Spinner } from "@/components/ui/spinner"
 import { Input } from "@/components/ui/input"
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -41,6 +43,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { CollectionPicker } from "@/components/collection-picker"
 import { DocumentActions } from "@/components/document-actions"
 import { DocumentUpload } from "@/components/document-upload"
 import { ConfirmAction } from "@/components/confirm-action"
@@ -64,6 +67,12 @@ export default function DocumentsPage() {
   const [deleteDocument, setDeleteDocument] = useState<Document | null>(null)
   const [deleteCollection, setDeleteCollection] = useState(false)
   const [preview, setPreview] = useState<Document | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkTrash, setBulkTrash] = useState<string[]>([])
+  const [moveOpen, setMoveOpen] = useState(false)
+  const [destination, setDestination] = useState<string | null>(null)
+  const [moving, setMoving] = useState(false)
+  const [moveError, setMoveError] = useState("")
   const documents = useResource(
     useCallback(() => api.documents.list(), []),
     (items) => items.some(documentIsPending)
@@ -87,6 +96,45 @@ export default function DocumentsPage() {
     [documents.data, query, collectionId]
   )
 
+  const chosen = visible.filter((file) => selected.has(file.id))
+  const hasPendingSelection = chosen.some(documentIsPending)
+  const canChooseDestination =
+    collectionItems.length > 1 ||
+    chosen.some((file) => file.collection_id != null)
+
+  function selectCollection(id: string) {
+    setCollectionId(id)
+    setSelected(new Set())
+  }
+
+  function toggleDocument(id: string, checked: boolean) {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  async function moveSelected(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setMoveError("")
+    setMoving(true)
+    try {
+      await api.documents.moveSelection(
+        chosen.map(({ id }) => id),
+        destination
+      )
+      setSelected(new Set())
+      setMoveOpen(false)
+      await documents.refresh()
+    } catch (error) {
+      setMoveError(errorMessage(error))
+    } finally {
+      setMoving(false)
+    }
+  }
+
   async function createCollection(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const name = String(new FormData(event.currentTarget).get("name")).trim()
@@ -96,7 +144,7 @@ export default function DocumentsPage() {
     try {
       const result = await api.collections.create(name)
       await collections.refresh()
-      setCollectionId(result.id)
+      selectCollection(result.id)
       setCreateOpen(false)
     } catch (error) {
       setCreateError(errorMessage(error))
@@ -123,8 +171,11 @@ export default function DocumentsPage() {
               New collection
             </Button>
             <DocumentUpload
-              onUpload={async (files, key) => {
-                await api.documents.upload(files, collection?.id, key)
+              collections={collections.data ?? []}
+              defaultCollectionId={collection?.id}
+              onUpload={async (files, key, destination) => {
+                await api.documents.upload(files, destination ?? undefined, key)
+                selectCollection(destination ?? "all")
                 await documents.refresh()
               }}
             >
@@ -152,14 +203,17 @@ export default function DocumentsPage() {
             aria-label="Filter documents"
             placeholder="Filter by filename"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value)
+              setSelected(new Set())
+            }}
           />
         </InputGroup>
         <Select
           items={collectionItems}
           value={collectionId}
           onValueChange={(value) => {
-            if (value) setCollectionId(value)
+            if (value) selectCollection(value)
           }}
         >
           <SelectTrigger
@@ -188,7 +242,38 @@ export default function DocumentsPage() {
           </Button>
         )}
       </div>
-      <Card className="py-0">
+      {chosen.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span role="status" className="text-sm text-muted-foreground">
+            {chosen.length} selected
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={hasPendingSelection || !canChooseDestination}
+            onClick={() => {
+              setMoveError("")
+              setDestination(chosen[0]?.collection_id ?? null)
+              setMoveOpen(true)
+            }}
+          >
+            Move
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => setBulkTrash(chosen.map(({ id }) => id))}
+          >
+            Trash
+          </Button>
+          {hasPendingSelection && (
+            <span className="text-xs text-muted-foreground">
+              Wait for indexing to finish before moving.
+            </span>
+          )}
+        </div>
+      )}
+      <Card className="gap-0 py-0">
         {documents.loading ? (
           <CardContent className="p-4">
             <LoadingRows label="Loading document library" />
@@ -211,22 +296,45 @@ export default function DocumentsPage() {
           </Empty>
         ) : (
           <>
-            <div
-              className="hidden grid-cols-[minmax(0,1fr)_7rem_8rem_6rem_2.5rem] items-center gap-3 border-b bg-muted px-4 py-2.5 text-xs font-semibold text-muted-foreground md:grid"
-              aria-hidden="true"
-            >
-              <span>Filename</span>
-              <span>Status</span>
-              <span>Uploaded</span>
-              <span>Size</span>
-              <span />
+            <div className="grid grid-cols-[1rem_minmax(0,1fr)_auto_auto] items-center gap-2 border-b bg-muted px-3 py-2.5 text-xs font-semibold text-muted-foreground md:grid-cols-[1rem_minmax(0,1fr)_7rem_8rem_6rem_2.5rem] md:gap-3 md:px-4">
+              <Checkbox
+                id="select-visible-pdfs"
+                aria-label="Select all visible PDFs"
+                checked={chosen.length === visible.length}
+                indeterminate={
+                  chosen.length > 0 && chosen.length < visible.length
+                }
+                onCheckedChange={(checked) =>
+                  setSelected(
+                    new Set(checked ? visible.map(({ id }) => id) : [])
+                  )
+                }
+              />
+              <label
+                htmlFor="select-visible-pdfs"
+                className="col-span-3 md:hidden"
+              >
+                Select all
+              </label>
+              <span className="hidden md:block">Filename</span>
+              <span className="hidden md:block">Status</span>
+              <span className="hidden md:block">Uploaded</span>
+              <span className="hidden md:block">Size</span>
+              <span className="hidden md:block" />
             </div>
             <ul className="divide-y">
               {visible.map((file) => (
                 <li
                   key={file.id}
-                  className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-3 md:grid-cols-[minmax(0,1fr)_7rem_8rem_6rem_2.5rem] md:gap-3 md:px-4"
+                  className="grid min-w-0 grid-cols-[1rem_minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-3 md:grid-cols-[1rem_minmax(0,1fr)_7rem_8rem_6rem_2.5rem] md:gap-3 md:px-4"
                 >
+                  <Checkbox
+                    aria-label={`Select ${file.filename}`}
+                    checked={selected.has(file.id)}
+                    onCheckedChange={(checked) =>
+                      toggleDocument(file.id, checked)
+                    }
+                  />
                   <div className="flex min-w-0 items-start gap-2.5">
                     <FileTextIcon
                       className="mt-0.5 size-4 shrink-0 text-muted-foreground"
@@ -263,6 +371,7 @@ export default function DocumentsPage() {
                     {formatBytes(file.file_size)}
                   </span>
                   <DocumentActions
+                    collections={collections.data ?? []}
                     file={file}
                     onTrash={() => setDeleteDocument(file)}
                     onRetryError={setRetryError}
@@ -355,6 +464,67 @@ export default function DocumentsPage() {
           </form>
         </DialogContent>
       </Dialog>
+      <Dialog
+        open={moveOpen}
+        onOpenChange={(open) => {
+          if (!moving) setMoveOpen(open)
+        }}
+      >
+        <DialogContent showCloseButton={!moving}>
+          <DialogHeader>
+            <DialogTitle>Move selected PDFs</DialogTitle>
+            <DialogDescription>
+              Choose a destination for {chosen.length} selected.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={moveSelected} className="grid gap-4">
+            {moveError && <ErrorNotice>{moveError}</ErrorNotice>}
+            <CollectionPicker
+              id="bulk-move-collection"
+              collections={collections.data ?? []}
+              value={destination}
+              onChange={setDestination}
+              disabled={moving}
+            />
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={moving}
+                onClick={() => setMoveOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={
+                  moving ||
+                  !chosen.length ||
+                  chosen.every(
+                    (file) => (file.collection_id ?? null) === destination
+                  )
+                }
+              >
+                {moving && <Spinner data-icon="inline-start" />}
+                Move
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      {bulkTrash.length > 0 && (
+        <ConfirmAction
+          title={`Move ${bulkTrash.length} selected to Trash?`}
+          description="You can restore these PDFs from Trash."
+          action="Move to trash"
+          onClose={() => setBulkTrash([])}
+          onConfirm={async () => {
+            await api.documents.trashSelection(bulkTrash)
+            setSelected(new Set())
+            await documents.refresh()
+          }}
+        />
+      )}
       {deleteDocument && (
         <ConfirmAction
           title="Move PDF to trash?"
@@ -369,13 +539,13 @@ export default function DocumentsPage() {
       )}
       {deleteCollection && collection && (
         <ConfirmAction
-          title="Permanently delete collection?"
-          description={`Deleting ${collection.name} also deletes the PDFs and conversations in the collection.`}
-          action="Delete collection"
+          title="Move collection to Trash?"
+          description={`${collection.name} and its PDFs can be restored from Trash. Collection conversations will be permanently deleted.`}
+          action="Move to Trash"
           onClose={() => setDeleteCollection(false)}
           onConfirm={async () => {
             await api.collections.delete(collection.id)
-            setCollectionId("all")
+            selectCollection("all")
             await Promise.all([documents.refresh(), collections.refresh()])
           }}
         />

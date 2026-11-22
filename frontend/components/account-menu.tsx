@@ -1,12 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import {
-  ChevronDownIcon,
-  CircleUserRoundIcon,
-  HouseIcon,
-  LogOutIcon,
-} from "lucide-react"
+import { CircleUserRoundIcon, HouseIcon, LogOutIcon } from "lucide-react"
 
 import { UserAvatar, type ProfileIdentity } from "@/components/user-avatar"
 import { Button } from "@/components/ui/button"
@@ -45,16 +40,15 @@ export function AccountMenu({
       <DropdownMenuTrigger
         render={
           <Button
-            size="sm"
+            size="icon"
             variant="ghost"
+            className="rounded-full"
             aria-label="Account menu"
             disabled={pending}
           />
         }
       >
         <UserAvatar profile={profile} size="sm" />
-        <span className="max-w-28 truncate">Account</span>
-        <ChevronDownIcon />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44">
         <DropdownMenuGroup>

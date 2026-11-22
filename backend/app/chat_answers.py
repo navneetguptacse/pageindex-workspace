@@ -186,9 +186,9 @@ def scoped_answer(
     settings: Settings,
     usage: dict[str, int],
     *,
-    api_key: str,
+    api_key: str | None,
     session: Session,
-    workspace_id: str,
+    workspace_id: str | None,
 ) -> ChatAnswer:
     if not document_ids:
         return ChatAnswer("There are no indexed PDFs in these sources yet.")
@@ -270,26 +270,36 @@ def scoped_answer(
         ]
         input_bound = len(json.dumps(request_messages, ensure_ascii=False).encode())
         input_bound += 128 + 16 * len(request_messages)
-        reservation = reserve_chat_tokens(session, workspace_id, input_bound, budget)
+        reservation = (
+            reserve_chat_tokens(session, workspace_id, input_bound, budget)
+            if workspace_id
+            else None
+        )
         try:
             reply = completion(
                 model=model,
                 messages=request_messages,
                 api_key=api_key,
-                max_tokens=reservation.output_tokens,
+                max_tokens=reservation.output_tokens if reservation else budget,
                 timeout=90,
                 num_retries=0,
             )
         except Exception as exc:
+            if reservation is None:
+                raise
             if getattr(exc, "status_code", None) in {400, 401, 403, 404, 422, 429}:
                 settle_chat_tokens(session, reservation, 0)
             raise chat_provider_failure(model, exc) from None
         reported_usage = getattr(reply, "usage", None)
         counts = reported_usage.model_dump() if reported_usage else None
         actual = token_usage(counts) or {}
-        if counts and (
-            counts.get("total_tokens") is not None
-            or {"prompt_tokens", "completion_tokens"} <= actual.keys()
+        if (
+            reservation
+            and counts
+            and (
+                counts.get("total_tokens") is not None
+                or {"prompt_tokens", "completion_tokens"} <= actual.keys()
+            )
         ):
             total = actual.get("total_tokens")
             if total is not None and total >= 0:

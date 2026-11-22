@@ -119,6 +119,19 @@ class TestWorkspace(unittest.TestCase):
         self.login()
         response = self.client.get("/api/v1/documents/")
         self.assertEqual([row["doc_id"] for row in response.json()], ["alice-document"])
+        with Session(self.engine) as session:
+            other = session.get(Document, self.other_document_id)
+            collection = Collection(name="Other workspace", owner_id=other.owner_id)
+            session.add(collection)
+            session.flush()
+            destination = str(collection.id)
+            session.commit()
+        doc_id = response.json()[0]["id"]
+        moved = self.client.patch(
+            f"/api/v1/documents/{doc_id}/collection",
+            json={"collection_id": destination},
+        )
+        self.assertEqual(moved.status_code, 404)
         response = self.client.delete(f"/api/v1/documents/{self.other_document_id}")
         self.assertEqual(response.status_code, 404)
         response = self.client.patch(
@@ -140,6 +153,113 @@ class TestWorkspace(unittest.TestCase):
             self.assertFalse(session.get(ChatSession, self.other_session_id).is_deleted)
         self.assertEqual(self.client.post("/api/v1/workspace/logout").status_code, 204)
         self.assertEqual(self.client.get("/api/v1/documents/").status_code, 401)
+
+    def test_bulk_document_actions_are_atomic_and_workspace_scoped(self):
+        self.login()
+        collection = self.client.post(
+            "/api/v1/collections", json={"name": "Selected PDFs"}
+        )
+        self.assertEqual(collection.status_code, 201, collection.text)
+        collection_id = collection.json()["id"]
+        with Session(self.engine) as session:
+            second = Document(
+                owner_id=self.alice_id,
+                doc_id="second",
+                filename="second.pdf",
+                status="ready",
+            )
+            pending = Document(
+                owner_id=self.alice_id,
+                doc_id="queued",
+                filename="queued.pdf",
+                status="queued",
+            )
+            session.add_all([second, pending])
+            session.commit()
+        files = {
+            row["doc_id"]: row for row in self.client.get("/api/v1/documents").json()
+        }
+        ids = [files[name]["id"] for name in ("alice-document", "second")]
+        base = "/api/v1/documents/batch"
+        response = self.client.patch(
+            f"{base}/collection",
+            json={
+                "document_ids": [*ids, files["queued"]["id"]],
+                "collection_id": collection_id,
+            },
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/documents", params={"collection_id": collection_id}
+            ).json(),
+            [],
+        )
+        response = self.client.patch(
+            f"{base}/collection",
+            json={
+                "document_ids": [*ids, str(self.other_document_id)],
+                "collection_id": collection_id,
+            },
+        )
+        self.assertEqual(response.status_code, 404, response.text)
+        response = self.client.patch(
+            f"{base}/collection",
+            json={"document_ids": ids, "collection_id": collection_id},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(
+            all(row["collection_id"] == collection_id for row in response.json())
+        )
+        response = self.client.post(
+            f"{base}/trash", json={"document_ids": [*ids, str(self.other_document_id)]}
+        )
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(
+            len(
+                self.client.get(
+                    "/api/v1/documents", params={"collection_id": collection_id}
+                ).json()
+            ),
+            2,
+        )
+        response = self.client.post(f"{base}/trash", json={"document_ids": ids})
+        self.assertEqual(response.status_code, 204, response.text)
+        self.assertEqual(
+            {row["id"] for row in self.client.get("/api/v1/trash/items").json()},
+            set(ids),
+        )
+
+    def test_collection_trash_is_workspace_scoped(self):
+        self.login()
+        with Session(self.engine, expire_on_commit=False) as session:
+            other = session.get(Document, self.other_document_id)
+            collection = Collection(
+                name="Private collection", owner_id=other.owner_id, deleted_at=utc_now()
+            )
+            session.add(collection)
+            session.flush()
+            other.collection_id = collection.id
+            other.trashed_with_collection = True
+            other.is_deleted = True
+            other.deleted_at = collection.deleted_at
+            session.commit()
+
+        self.assertEqual(self.client.get("/api/v1/trash/items").json(), [])
+        items = [
+            {"id": str(collection.id), "type": "collection"},
+            {"id": str(other.id), "type": "document"},
+        ]
+        self.assertEqual(
+            self.client.post("/api/v1/trash/restore", json={"items": items}).json(),
+            {"restored": 0},
+        )
+        self.assertEqual(
+            self.client.delete("/api/v1/trash/empty").json(), {"purged": 0}
+        )
+        with Session(self.engine) as session:
+            self.assertIsNotNone(session.get(Collection, collection.id).deleted_at)
+            self.assertTrue(session.get(Document, other.id).is_deleted)
 
     def test_provider_checks_reject_invalid_replacements_and_can_retest_saved_keys(
         self,

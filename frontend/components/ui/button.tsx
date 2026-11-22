@@ -22,6 +22,7 @@ const buttonVariants = cva(
       },
       size: {
         default: "min-h-control px-3",
+        inline: "min-h-0 border-0 p-0",
         xs: "min-h-control-xs gap-1.5 px-2 text-xs/4 [--button-icon-size:var(--spacing-icon-xs)]",
         sm: "min-h-control-sm px-2.5",
         lg: "min-h-control-lg px-4 [--button-icon-size:var(--spacing-icon-lg)]",

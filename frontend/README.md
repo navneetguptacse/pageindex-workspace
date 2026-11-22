@@ -28,5 +28,5 @@ The public homepage at `/` links to the workspace, sign-in, and registration. Wi
 - In **Profile & settings**, upload, replace, or remove a profile photo. The account menu shows your name and photo, with initials when no photo is saved.
 
 - In **Provider settings**, save a PageIndex API key for PDF features and a chat provider, API key, and model for answers.
-- In **Documents**, use the **⋯** menu to rename a PDF or retry a failed upload with the existing file.
+- In **Documents**, choose a collection in the upload dialog. Use the **⋯** menu to move a PDF between collections, rename it, or retry a failed upload. Moving preserves the existing PDF index and citations. Select multiple PDFs to move or trash them together. Deleting a collection sends it and its PDFs to Trash. Open the collection in Trash to restore individual PDFs, or restore the collection to recover the PDFs deleted with it.
 - In **Chat**, choose a library, collection, or single PDF. Ask “List the documents and their total pages” to get a table for the selected scope without using model tokens. Use **Older** and **Newer** in conversation history to browse saved chats.

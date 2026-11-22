@@ -146,10 +146,12 @@ export interface PagePreview {
 
 export interface TrashItem {
   id: string
-  type: "document" | "chat" | "extract"
+  type: "collection" | "document" | "chat" | "extract"
   title: string
   details?: string | null
   deleted_at: string
+  collection_id?: string | null
+  collection_name?: string | null
 }
 
 export type OAuthProvider = "google" | "github"
@@ -354,6 +356,20 @@ export const api = {
       `/api/v1/workspace/oauth/${provider}${link ? "?link=true" : ""}`,
   },
   documents: {
+    moveSelection: (document_ids: string[], collection_id: string | null) =>
+      request<Document[]>("/documents/batch/collection", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document_ids, collection_id }),
+      }),
+    trashSelection: (document_ids: string[]) =>
+      post<void>("/documents/batch/trash", { document_ids }),
+    move: (id: string, collection_id: string | null) =>
+      request<Document>(`/documents/${encodeURIComponent(id)}/collection`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ collection_id }),
+      }),
     list: (collectionId?: string) =>
       request<Document[]>(
         `/documents${query({ collection_id: collectionId })}`

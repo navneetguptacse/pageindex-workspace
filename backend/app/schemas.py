@@ -56,6 +56,18 @@ class DocumentRename(BaseModel):
         return filename
 
 
+class DocumentMove(BaseModel):
+    collection_id: uuid.UUID | None
+
+
+class DocumentSelection(BaseModel):
+    document_ids: list[uuid.UUID] = Field(min_length=1)
+
+
+class DocumentBatchMove(DocumentSelection, DocumentMove):
+    pass
+
+
 class DocumentRead(BaseModel):
     id: uuid.UUID
     doc_id: str
@@ -230,18 +242,21 @@ class ExtractJobRead(BaseModel):
     deleted_at: datetime | None = None
 
 
+TrashItemType = Literal["collection", "document", "chat", "extract"]
+
+
 class TrashItemRef(BaseModel):
     id: Identifier
-    type: Literal["document", "chat", "extract"]
+    type: TrashItemType
 
 
 class TrashBatchRequest(BaseModel):
     items: list[TrashItemRef] = Field(max_length=200)
 
 
-class TrashItemRead(BaseModel):
-    id: str
-    type: str
+class TrashItemRead(TrashItemRef):
     title: str
     details: str | None = None
     deleted_at: datetime
+    collection_id: uuid.UUID | None = None
+    collection_name: str | None = None

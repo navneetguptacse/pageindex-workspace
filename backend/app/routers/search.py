@@ -39,7 +39,9 @@ def search_pages(session: SessionDep, body: SearchRequest) -> SearchResponse:
                 local_id = None
             if local_id is not None:
                 match = match | (Collection.id == local_id)
-            collections = select(Collection.id).where(match)
+            collections = select(Collection.id).where(
+                match, Collection.deleted_at.is_(None)
+            )
             collection_id = session.exec(collections).first()
             if collection_id is None:
                 raise HTTPException(status_code=404, detail="Collection not found")

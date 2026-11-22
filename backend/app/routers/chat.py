@@ -23,12 +23,13 @@ from app.chat_answers import (
 )
 from app.chat_context import Prompt, build_prompt, supplied_turns
 from app.config import get_settings
-from app.database import SessionDep, current_workspace
+from app.database import SessionDep, current_workspace, lock_auth_transaction
 from app.document_storage import local_document_path
 from app.models import ChatHistory, ChatSession, Collection, Document, utc_now
 from app.pageindex_clients import get_pageindex_client, provider_request
 from app.provider_settings import workspace_chat
 from app.quota import record_chat_tokens, reserve_provider_request
+from app.routers.collections import active_collection
 from app.schemas import (
     ChatBatchDeleteRequest,
     ChatHistoryRead,
@@ -66,15 +67,16 @@ def _collection_scope(session: Session, identifier: str) -> Collection:
         local_id = UUID(identifier)
     except ValueError:
         local_id = None
-    collection = session.get(Collection, local_id) if local_id else None
+    collection = active_collection(session, local_id) if local_id else None
     if collection is None:
         collection = session.exec(
-            select(Collection).where(Collection.pageindex_collection_id == identifier)
+            select(Collection).where(
+                Collection.pageindex_collection_id == identifier,
+                Collection.deleted_at.is_(None),
+            )
         ).first()
     if collection is None:
         raise HTTPException(status_code=404, detail="Collection not found")
-    if not collection.pageindex_collection_id:
-        raise HTTPException(status_code=409, detail="Collection has no PageIndex index")
     return collection
 
 
@@ -82,7 +84,6 @@ def _agent_answer(
     prompt: Prompt,
     model: str,
     doc_id: str | None,
-    collection_id: str | None,
     cites: bool,
     max_turns: int,
     max_tokens: int,
@@ -92,7 +93,6 @@ def _agent_answer(
     options = {
         "citations": cites,
         "doc_id": doc_id,
-        "collection_id": collection_id,
         "model": model,
         "max_turns": max_turns,
     }
@@ -200,13 +200,14 @@ def chat(session: SessionDep, body: ChatRequest) -> ChatHistory:
             select(Document).where(*scope).order_by(Document.filename, Document.id)
         ).all()
         inventory = [(row.filename, local_document_path(row)) for row in documents]
-    elif workspace is not None:
-        provider = workspace_chat(session, workspace)
-        if body.model and body.model != provider.model:
-            raise HTTPException(
-                status_code=422, detail="Choose the chat model in Account settings."
-            )
-        model = provider.model
+    elif shared_workspace or collection is not None:
+        if workspace is not None:
+            provider = workspace_chat(session, workspace)
+            if body.model and body.model != provider.model:
+                raise HTTPException(
+                    status_code=422, detail="Choose the chat model in Account settings."
+                )
+            model = provider.model
         scoped_document_ids = list(
             dict.fromkeys(session.exec(select(Document.doc_id).where(*scope)).all())
         )
@@ -235,7 +236,7 @@ def chat(session: SessionDep, body: ChatRequest) -> ChatHistory:
         if conversation.title not in ("New Conversation", "New Chat", ""):
             title = conversation.title
     session_id = conversation.id
-    cloud_collection_id = collection.pageindex_collection_id if collection else None
+    collection_chat = collection is not None
     session.rollback()
 
     usage: dict[str, int] = {}
@@ -247,7 +248,11 @@ def chat(session: SessionDep, body: ChatRequest) -> ChatHistory:
         try:
             with provider_request("chat"):
                 try:
-                    if workspace is not None and provider is not None:
+                    if provider is not None or collection_chat:
+                        native_key = {
+                            "openai": settings.openai_api_key,
+                            "deepseek": settings.deepseek_api_key,
+                        }.get(model.split("/", 1)[0] if "/" in model else "openai")
                         reply = scoped_answer(
                             prompt,
                             body.question,
@@ -256,16 +261,17 @@ def chat(session: SessionDep, body: ChatRequest) -> ChatHistory:
                             body.citations,
                             settings,
                             usage,
-                            api_key=provider.api_key.get_secret_value(),
+                            api_key=provider.api_key.get_secret_value()
+                            if provider
+                            else native_key or None,
                             session=session,
-                            workspace_id=workspace.id,
+                            workspace_id=workspace.id if workspace else None,
                         )
                     else:
                         reply = _agent_answer(
                             prompt,
                             model,
                             target_doc_id,
-                            cloud_collection_id,
                             body.citations,
                             settings.chat_max_turns,
                             settings.chat_output_tokens,
@@ -286,6 +292,11 @@ def chat(session: SessionDep, body: ChatRequest) -> ChatHistory:
                         + usage.get("completion_tokens", 0)
                     ),
                 )
+
+    if local_collection_id is not None:
+        lock_auth_transaction(session)
+        if active_collection(session, local_collection_id) is None:
+            raise HTTPException(409, "Chat scope changed while answering")
 
     now = utc_now()
     if previous_update is None:
@@ -402,6 +413,7 @@ def list_sessions(
 @router.post("/sessions", status_code=201)
 def create_session(session: SessionDep, body: ChatSessionCreate) -> ChatSessionRead:
     if body.collection_id:
+        lock_auth_transaction(session)
         _collection_scope(session, str(body.collection_id))
     document = _lookup_document(session, body.doc_id)
     if body.doc_id and current_workspace.get() is not None and document is None:

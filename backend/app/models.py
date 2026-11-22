@@ -20,11 +20,10 @@ class Collection(WorkspaceRecord, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     name: str = Field(index=True)
     pageindex_collection_id: str | None = Field(default=None)
+    deleted_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
-    documents: list["Document"] = Relationship(
-        back_populates="collection", cascade_delete=True
-    )
+    documents: list["Document"] = Relationship(back_populates="collection")
     chat_histories: list["ChatHistory"] = Relationship(
         back_populates="collection", cascade_delete=True
     )
@@ -45,6 +44,7 @@ class Document(WorkspaceRecord, table=True):
     uploaded_at: datetime = Field(default_factory=utc_now)
     is_deleted: bool = Field(default=False, index=True)
     deleted_at: datetime | None = Field(default=None)
+    trashed_with_collection: bool = False
     metadata_: dict[str, Any] | None = Field(default=None, sa_type=JSON)
 
     collection: Collection | None = Relationship(back_populates="documents")

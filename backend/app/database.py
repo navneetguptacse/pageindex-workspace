@@ -108,11 +108,20 @@ def lock_auth_transaction(session: Session) -> None:
         connection.exec_driver_sql("SELECT pg_advisory_xact_lock(764312801)")
 
 
-WORKSPACE_NAME_COLUMNS = ("first_name", "last_name")
+WORKSPACE_NAME_COLUMNS = tuple(
+    (name, "VARCHAR") for name in ("first_name", "last_name")
+)
+COLLECTION_TRASH_FLAGS = ("trashed_with_collection", "BOOLEAN NOT NULL DEFAULT FALSE")
+POSTGRES_COLUMNS = {
+    WorkspaceUser.__tablename__: WORKSPACE_NAME_COLUMNS,
+    Collection.__tablename__: (("deleted_at", "TIMESTAMP WITH TIME ZONE"),),
+    Document.__tablename__: (COLLECTION_TRASH_FLAGS,),
+}
 
 
 LEGACY_SQLITE_COLUMNS = {
     Document.__tablename__: (
+        COLLECTION_TRASH_FLAGS,
         ("original_filename", "VARCHAR"),
         ("processing_error", "VARCHAR"),
         ("is_deleted", "BOOLEAN NOT NULL DEFAULT 0"),
@@ -131,11 +140,11 @@ LEGACY_SQLITE_COLUMNS = {
         ("extract_metadata", "JSON"),
     ),
     ChatHistory.__tablename__: (("session_id", "VARCHAR"), ("usage", "JSON")),
-    Collection.__tablename__: (),
+    Collection.__tablename__: (("deleted_at", "DATETIME"),),
     WorkspaceUser.__tablename__: (
         ("email", "VARCHAR"),
         ("email_verified", "BOOLEAN NOT NULL DEFAULT 0"),
-        *((name, "VARCHAR") for name in WORKSPACE_NAME_COLUMNS),
+        *WORKSPACE_NAME_COLUMNS,
     ),
 }
 
@@ -145,10 +154,11 @@ def initialize_database(target: Engine) -> None:
         if target.dialect.name == "postgresql":
             connection.exec_driver_sql("SELECT pg_advisory_xact_lock(764312800)")
             SQLModel.metadata.create_all(connection)
-            for name in WORKSPACE_NAME_COLUMNS:
-                connection.exec_driver_sql(
-                    f"ALTER TABLE {WorkspaceUser.__tablename__} ADD COLUMN IF NOT EXISTS {name} VARCHAR"
-                )
+            for table, columns in POSTGRES_COLUMNS.items():
+                for name, definition in columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {definition}"
+                    )
             return
         connection.exec_driver_sql("BEGIN IMMEDIATE")
         SQLModel.metadata.create_all(connection)

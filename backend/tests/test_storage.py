@@ -15,12 +15,37 @@ from app import database
 from app.config import Settings
 from app.document_storage import upload_path
 from app.migrate_sqlite import migrate
-from app.models import Document, LoginSession, WorkspaceUser, utc_now
+from app.models import Collection, Document, LoginSession, WorkspaceUser, utc_now
 from app.preview_cache import preview_cache
 from main import app
 
 
 class TestStorage(unittest.TestCase):
+    def test_existing_collection_schema_gets_trash_columns(self):
+        engine = test_engine(self, "sqlite://")
+        database.initialize_database(engine)
+        with Session(engine, expire_on_commit=False) as session:
+            collection = Collection(name="Existing collection")
+            session.add(collection)
+            session.flush()
+            document = Document(
+                filename="existing.pdf", doc_id="existing", collection_id=collection.id
+            )
+            session.add(document)
+            session.commit()
+        with engine.begin() as connection:
+            connection.exec_driver_sql("ALTER TABLE collection DROP COLUMN deleted_at")
+            connection.exec_driver_sql(
+                "ALTER TABLE document DROP COLUMN trashed_with_collection"
+            )
+        database.initialize_database(engine)
+        database.initialize_database(engine)
+        with Session(engine) as session:
+            self.assertIsNone(session.get(Collection, collection.id).deleted_at)
+            pdf = session.get(Document, document.id)
+            self.assertEqual(pdf.collection_id, collection.id)
+            self.assertFalse(pdf.trashed_with_collection)
+
     @unittest.skipUnless(
         os.environ.get("TEST_DATABASE_URL"), "PostgreSQL test database not provided"
     )

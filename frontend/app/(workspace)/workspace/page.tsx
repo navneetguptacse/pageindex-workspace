@@ -99,8 +99,9 @@ export default function DashboardPage() {
         description="Manage your PDFs and get answers grounded in the original pages."
         actions={
           <DocumentUpload
-            onUpload={async (files, key) => {
-              await api.documents.upload(files, undefined, key)
+            collections={collections.data ?? []}
+            onUpload={async (files, key, destination) => {
+              await api.documents.upload(files, destination ?? undefined, key)
               await documents.refresh()
             }}
           >
@@ -256,6 +257,7 @@ export default function DashboardPage() {
                   <div className="flex shrink-0 items-center gap-2">
                     <ResourceStatus status={file.status} />
                     <DocumentActions
+                      collections={collections.data ?? []}
                       file={file}
                       onRetryError={setRetryError}
                       onUpdated={(updated) => {

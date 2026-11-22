@@ -1,6 +1,13 @@
 "use client"
 
-import { Suspense, useCallback, useRef, useState, type FormEvent } from "react"
+import {
+  Suspense,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react"
 import { useSearchParams } from "next/navigation"
 import {
   ArrowUpIcon,
@@ -60,6 +67,7 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
+  useMessageScroller,
 } from "@/components/ui/message-scroller"
 import {
   AlertDialog,
@@ -209,6 +217,16 @@ function ConversationList({
   )
 }
 
+function ScrollOnSend({ generating }: { generating: boolean }) {
+  const { scrollToEnd } = useMessageScroller()
+
+  useLayoutEffect(() => {
+    if (generating) scrollToEnd()
+  }, [generating, scrollToEnd])
+
+  return null
+}
+
 function ChatWorkspace() {
   const params = useSearchParams()
   const initialDoc = params.get("doc")
@@ -259,12 +277,10 @@ function ChatWorkspace() {
         value: `document:${document.doc_id}`,
         label: document.filename,
       })),
-    ...(collections.data ?? [])
-      .filter((collection) => collection.pageindex_collection_id)
-      .map((collection) => ({
-        value: `collection:${collection.id}`,
-        label: `Collection: ${collection.name}`,
-      })),
+    ...(collections.data ?? []).map((collection) => ({
+      value: `collection:${collection.id}`,
+      label: `Collection: ${collection.name}`,
+    })),
   ]
 
   const onCitationClick = ({ doc, page }: { doc?: string; page: number }) => {
@@ -443,6 +459,7 @@ function ChatWorkspace() {
             key={chat.sessionId ?? chat.scope}
             autoScroll
           >
+            <ScrollOnSend generating={generating} />
             <MessageScroller className="flex-1">
               <MessageScrollerViewport>
                 <MessageScrollerContent className="mx-auto max-w-3xl gap-5 px-3 py-5 sm:px-6">
@@ -491,7 +508,6 @@ function ChatWorkspace() {
                         <MessageScrollerItem
                           messageId={message.id!}
                           key={message.id}
-                          scrollAnchor={message.role === "user"}
                         >
                           <ChatMessageRow
                             message={message}
@@ -501,10 +517,7 @@ function ChatWorkspace() {
                       ))}
                       {generating && (
                         <>
-                          <MessageScrollerItem
-                            messageId="question-being-answered"
-                            scrollAnchor
-                          >
+                          <MessageScrollerItem messageId="question-being-answered">
                             <ChatMessageRow
                               message={{
                                 role: "user",

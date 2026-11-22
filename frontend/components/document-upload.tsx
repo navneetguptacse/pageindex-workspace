@@ -3,6 +3,7 @@
 import { useRef, useState, type DragEvent, type ReactElement } from "react"
 import { FileTextIcon, UploadCloudIcon, XIcon } from "lucide-react"
 
+import { CollectionPicker } from "@/components/collection-picker"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -15,19 +16,28 @@ import {
 } from "@/components/ui/dialog"
 import { Spinner } from "@/components/ui/spinner"
 import { ErrorNotice } from "@/components/workspace-ui"
-import { errorMessage } from "@/lib/api"
+import { errorMessage, type Collection } from "@/lib/api"
 import { formatBytes } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 export function DocumentUpload({
   onUpload,
+  collections,
+  defaultCollectionId = null,
   children,
 }: {
-  onUpload: (files: File[], idempotencyKey: string) => Promise<unknown>
+  onUpload: (
+    files: File[],
+    idempotencyKey: string,
+    collectionId: string | null
+  ) => Promise<unknown>
+  collections: Collection[]
+  defaultCollectionId?: string | null
   children: ReactElement
 }) {
   const [open, setOpen] = useState(false)
   const [files, setFiles] = useState<File[]>([])
+  const [destination, setDestination] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState("")
@@ -62,7 +72,7 @@ export function DocumentUpload({
     setError("")
     try {
       requestKey.current ??= crypto.randomUUID()
-      await onUpload(files, requestKey.current)
+      await onUpload(files, requestKey.current, destination)
       setOpen(false)
       setFiles([])
       requestKey.current = null
@@ -79,7 +89,9 @@ export function DocumentUpload({
       onOpenChange={(next) => {
         if (uploading) return
         setOpen(next)
-        if (!next) {
+        if (next) {
+          setDestination(defaultCollectionId)
+        } else {
           setFiles([])
           setError("")
           requestKey.current = null
@@ -96,6 +108,16 @@ export function DocumentUpload({
           </DialogDescription>
         </DialogHeader>
         {error && <ErrorNotice>{error}</ErrorNotice>}
+        <CollectionPicker
+          id="upload-collection"
+          collections={collections}
+          value={destination}
+          disabled={uploading}
+          onChange={(next) => {
+            if (next !== destination) requestKey.current = null
+            setDestination(next)
+          }}
+        />
         <div
           className={cn(
             "flex flex-col items-center gap-3 rounded-lg border border-dashed bg-muted p-6 text-center",
@@ -169,7 +191,12 @@ export function DocumentUpload({
           <Button
             variant="ghost"
             disabled={uploading}
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              setOpen(false)
+              setFiles([])
+              setError("")
+              requestKey.current = null
+            }}
           >
             Cancel
           </Button>

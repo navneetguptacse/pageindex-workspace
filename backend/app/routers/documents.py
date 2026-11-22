@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from sqlmodel import Session, func, select, update
 
 from app.config import get_settings
-from app.database import SessionDep
+from app.database import SessionDep, lock_auth_transaction
 from app.document_storage import (
     legacy_document_path,
     local_document_path,
@@ -25,11 +25,19 @@ from app.document_storage import (
     remove_upload,
     upload_path,
 )
-from app.models import Collection, Document, WorkItem, utc_now
+from app.models import Document, WorkItem, utc_now
 from app.pageindex_clients import get_pageindex_client, provider_key, provider_request
 from app.preview_cache import page_cache_key, preview_cache
 from app.quota import reserve_provider_request
-from app.schemas import DocumentRead, DocumentRename, PagePreviewRead
+from app.routers.collections import active_collection
+from app.schemas import (
+    DocumentBatchMove,
+    DocumentMove,
+    DocumentRead,
+    DocumentRename,
+    DocumentSelection,
+    PagePreviewRead,
+)
 from app.work_queue import (
     IdempotencyKey,
     commit_work,
@@ -79,7 +87,7 @@ def _upload_documents(
 
     cloud_collection_id = None
     if collection_id is not None:
-        collection = session.get(Collection, collection_id)
+        collection = active_collection(session, collection_id)
         if collection is None:
             raise HTTPException(status_code=404, detail="Collection not found")
         cloud_collection_id = collection.pageindex_collection_id
@@ -127,6 +135,8 @@ def _upload_documents(
                 file_fingerprints.append((document.filename, digest.hexdigest()))
 
         if background:
+            if collection_id is not None:
+                lock_auth_transaction(session)
             work = new_work(
                 "upload",
                 idempotency_key,
@@ -135,6 +145,11 @@ def _upload_documents(
             )
             previous = replay_work(session, work)
             if previous is None:
+                if (
+                    collection_id is not None
+                    and active_collection(session, collection_id) is None
+                ):
+                    raise HTTPException(409, "Collection was deleted during upload")
                 reserve_provider_request(session, amount=len(documents), commit=False)
                 for document in documents:
                     document.doc_id = str(document.id)
@@ -162,10 +177,10 @@ def _upload_documents(
                 logger.exception("PageIndex upload failed for document %s", document.id)
                 document.doc_id = document.doc_id or str(document.id)
                 document.status = "failed"
-        if collection_id is not None and session.get(Collection, collection_id) is None:
-            raise HTTPException(
-                status_code=409, detail="Collection was deleted during upload"
-            )
+        if collection_id is not None:
+            lock_auth_transaction(session)
+            if active_collection(session, collection_id) is None:
+                raise HTTPException(409, "Collection was deleted during upload")
         session.add_all(documents)
         session.commit()
     except Exception:
@@ -466,6 +481,71 @@ def rename_document(
     return document
 
 
+def _move_documents(
+    session: Session, document_ids: set[UUID], collection_id: UUID | None
+) -> list[Document]:
+    lock_auth_transaction(session)
+    if collection_id is not None and active_collection(session, collection_id) is None:
+        raise HTTPException(404, "Collection not found")
+    scope = (Document.id.in_(document_ids), Document.is_deleted.is_(False))
+    documents = list(session.exec(select(Document).where(*scope)).all())
+    if len(documents) != len(document_ids):
+        raise HTTPException(404, "One or more selected PDFs were not found.")
+    changing = {doc.id for doc in documents if doc.collection_id != collection_id}
+    if changing:
+        updated = (
+            session.exec(
+                update(Document)
+                .where(
+                    *scope,
+                    Document.id.in_(changing),
+                    Document.status.in_({"ready", "failed"}),
+                )
+                .values(collection_id=collection_id)
+                .returning(Document.id)
+            )
+            .scalars()
+            .all()
+        )
+        if len(updated) != len(changing):
+            raise HTTPException(
+                409, "Wait for processing to finish before moving the selected PDFs."
+            )
+    session.commit()
+    return documents
+
+
+@router.patch("/batch/collection", response_model=list[DocumentRead])
+def move_documents(body: DocumentBatchMove, session: SessionDep) -> list[Document]:
+    return _move_documents(session, set(body.document_ids), body.collection_id)
+
+
+@router.patch("/{document_id}/collection", response_model=DocumentRead)
+def move_document(
+    document_id: UUID, body: DocumentMove, session: SessionDep
+) -> Document:
+    return _move_documents(session, {document_id}, body.collection_id)[0]
+
+
+@router.post("/batch/trash", status_code=204)
+def trash_documents(body: DocumentSelection, session: SessionDep) -> None:
+    lock_auth_transaction(session)
+    document_ids = set(body.document_ids)
+    updated = (
+        session.exec(
+            update(Document)
+            .where(Document.id.in_(document_ids), Document.is_deleted.is_(False))
+            .values(is_deleted=True, deleted_at=utc_now())
+            .returning(Document.id)
+        )
+        .scalars()
+        .all()
+    )
+    if len(updated) != len(document_ids):
+        raise HTTPException(404, "One or more selected PDFs were not found.")
+    session.commit()
+
+
 @router.post("/{document_id}/retry", status_code=202, response_model=DocumentRead)
 def retry_document(document_id: UUID, session: SessionDep) -> Document:
     document = get_document(document_id, session)
@@ -502,6 +582,7 @@ def retry_document(document_id: UUID, session: SessionDep) -> Document:
 
 @router.delete("/{document_id}", status_code=204)
 def delete_document(document_id: UUID, session: SessionDep) -> None:
+    lock_auth_transaction(session)
     document = get_document(document_id, session)
     document.is_deleted = True
     document.deleted_at = utc_now()

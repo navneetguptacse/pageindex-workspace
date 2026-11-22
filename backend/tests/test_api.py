@@ -2,13 +2,14 @@ import io
 import unittest
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pypdfium2 as pdfium
 from database_support import test_engine
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel
 
+from app.chat_answers import ChatAnswer
 from app.config import Settings
 from app.database import get_session
 from app.models import ChatHistory, ChatSession, Document
@@ -73,37 +74,27 @@ class TestPageIndexAPI(unittest.TestCase):
         self.assertEqual(res.json(), {"status": "ok"})
 
     def test_02_collections_crud(self):
-        mock_pi = MagicMock()
-        mock_pi.create_collection.return_value = {
-            "collection": {"id": "pi_coll_123", "name": "Annual Reports"}
-        }
+        res = self.client.post("/api/v1/collections/", json={"name": "Annual Reports"})
+        self.assertEqual(res.status_code, 201)
+        coll = res.json()
+        self.assertEqual(coll["name"], "Annual Reports")
+        self.assertIsNone(coll["pageindex_collection_id"])
+        coll_id = coll["id"]
 
-        with patch(
-            "app.routers.collections.get_pageindex_client", return_value=mock_pi
-        ):
-            res = self.client.post(
-                "/api/v1/collections/", json={"name": "Annual Reports"}
-            )
-            self.assertEqual(res.status_code, 201)
-            coll = res.json()
-            self.assertEqual(coll["name"], "Annual Reports")
-            self.assertEqual(coll["pageindex_collection_id"], "pi_coll_123")
-            coll_id = coll["id"]
+        res = self.client.get("/api/v1/collections/")
+        self.assertEqual(res.status_code, 200)
+        items = res.json()
+        self.assertTrue(any(c["id"] == coll_id for c in items))
 
-            res = self.client.get("/api/v1/collections/")
-            self.assertEqual(res.status_code, 200)
-            items = res.json()
-            self.assertTrue(any(c["id"] == coll_id for c in items))
+        res = self.client.get(f"/api/v1/collections/{coll_id}")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["id"], coll_id)
 
-            res = self.client.get(f"/api/v1/collections/{coll_id}")
-            self.assertEqual(res.status_code, 200)
-            self.assertEqual(res.json()["id"], coll_id)
+        res = self.client.delete(f"/api/v1/collections/{coll_id}")
+        self.assertEqual(res.status_code, 204)
 
-            res = self.client.delete(f"/api/v1/collections/{coll_id}")
-            self.assertEqual(res.status_code, 204)
-
-            res = self.client.get(f"/api/v1/collections/{coll_id}")
-            self.assertEqual(res.status_code, 404)
+        res = self.client.get(f"/api/v1/collections/{coll_id}")
+        self.assertEqual(res.status_code, 404)
 
     def test_03_documents_flow(self):
         mock_pi_docs = MagicMock()
@@ -579,57 +570,192 @@ class TestPageIndexAPI(unittest.TestCase):
             self.assertEqual(response.status_code, 404)
             provider.assert_not_called()
 
-    def test_collection_upload_and_chat_use_provider_collection_id(self):
+    def test_collection_upload_move_chat_and_delete_sends_pdfs_to_trash(self):
         provider = MagicMock()
-        provider.create_collection.return_value = {
-            "collection": {"id": "provider-collection"}
-        }
         provider.submit_document.return_value = {"doc_id": "provider-document"}
-        provider.chat.return_value = chat_result("Collection answer")
-        provider.get_citations.return_value = []
-        with (
-            patch(
-                "app.routers.collections.get_pageindex_client", return_value=provider
-            ),
-            patch("app.routers.documents.get_pageindex_client", return_value=provider),
-            patch("app.routers.chat.get_pageindex_client", return_value=provider),
-        ):
-            collection = self.client.post(
-                "/api/v1/collections/", json={"name": "Reports"}
-            )
-            self.assertEqual(collection.status_code, 201)
-            collection_id = collection.json()["id"]
+        source = self.client.post(
+            "/api/v1/collections/", json={"name": "Source"}
+        ).json()["id"]
+        target = self.client.post(
+            "/api/v1/collections/", json={"name": "Target"}
+        ).json()["id"]
+        with patch("app.routers.documents.get_pageindex_client", return_value=provider):
             response = self.client.post(
                 "/api/v1/documents/",
-                params={"collection_id": collection_id},
+                params={"collection_id": source},
                 files={"file": ("report.pdf", pdf_bytes(1))},
             )
-            self.assertEqual(response.status_code, 201, response.text)
-            self.assertEqual(
-                provider.submit_document.call_args.kwargs["collection_id"],
-                "provider-collection",
+        self.assertEqual(response.status_code, 201, response.text)
+        submitted = response.json()
+        self.assertEqual(submitted["collection_id"], source)
+        self.assertEqual(provider.submit_document.call_count, 1)
+        self.assertNotIn("collection_id", provider.submit_document.call_args.kwargs)
+
+        path = f"/api/v1/documents/{submitted['id']}"
+        result = self.client.patch(f"{path}/collection", json={"collection_id": target})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["doc_id"], submitted["doc_id"])
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/documents", params={"collection_id": source}
+            ).json(),
+            [],
+        )
+        with patch(
+            "app.routers.chat.scoped_answer",
+            return_value=ChatAnswer("Collection answer"),
+        ) as answer:
+            turn = self.client.post(
+                "/api/v1/chat/",
+                json={
+                    "collection_id": target,
+                    "question": "What does the report say?",
+                },
             )
+            self.assertEqual(turn.status_code, 201, turn.text)
+            self.assertEqual(answer.call_args.args[2], ["provider-document"])
+        self.assertEqual(
+            self.client.delete(f"/api/v1/collections/{source}").status_code, 204
+        )
+        self.assertEqual(self.client.get(path).json()["collection_id"], target)
+        self.assertEqual(
+            self.client.delete(f"/api/v1/collections/{target}").status_code, 204
+        )
+        self.assertEqual(self.client.get(path).status_code, 404)
+        document_id = path.rsplit("/", 1)[1]
+        trash = self.client.get("/api/v1/trash/items").json()
+        self.assertIn(document_id, {item["id"] for item in trash})
+        restored = self.client.post(
+            "/api/v1/trash/restore",
+            json={"items": [{"id": document_id, "type": "document"}]},
+        )
+        self.assertEqual(restored.json(), {"restored": 2})
+        self.assertEqual(self.client.get(path).json()["collection_id"], target)
+        self.assertEqual(
+            self.client.get(f"/api/v1/collections/{target}").status_code, 200
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/api/v1/chat/sessions/{turn.json()['session_id']}"
+            ).status_code,
+            404,
+        )
+
+    def test_collection_trash_restores_one_or_all_pdfs_to_the_original_location(self):
+        base = "/api/v1"
+        collection_id = self.client.post(
+            f"{base}/collections", json={"name": "My collection"}
+        ).json()["id"]
+        collection_path = f"{base}/collections/{collection_id}"
+        collection_ref = {"id": collection_id, "type": "collection"}
+        with Session(self.test_engine, expire_on_commit=False) as session:
+            first, second, earlier, unfiled = [
+                Document(
+                    doc_id=str(uuid4()),
+                    filename=name,
+                    collection_id=owner,
+                    status="ready",
+                )
+                for name, owner in (
+                    ("first.pdf", UUID(collection_id)),
+                    ("second.pdf", UUID(collection_id)),
+                    ("earlier.pdf", UUID(collection_id)),
+                    ("unfiled.pdf", None),
+                )
+            ]
+            session.add_all([first, second, earlier, unfiled])
+            session.commit()
+
+        def trash():
+            return {
+                item["id"]: item
+                for item in self.client.get(f"{base}/trash/items").json()
+            }
+
+        def restore(*items):
+            return self.client.post(
+                f"{base}/trash/restore", json={"items": items}
+            ).json()
+
+        def active_pdfs():
+            return {
+                doc["id"]: doc["collection_id"]
+                for doc in self.client.get(f"{base}/documents").json()
+            }
+
+        main_ids = {str(first.id): collection_id, str(second.id): collection_id}
+        earlier_id, unfiled_id = str(earlier.id), str(unfiled.id)
+        first_ref = {"id": str(first.id), "type": "document"}
+        self.assertEqual(
+            self.client.delete(f"{base}/documents/{earlier_id}").status_code, 204
+        )
+        earlier_deleted_at = trash()[earlier_id]["deleted_at"]
+        self.assertEqual(self.client.delete(collection_path).status_code, 204)
+        self.assertEqual(self.client.get(collection_path).status_code, 404)
+        self.assertEqual(self.client.get(f"{base}/collections").json(), [])
+        self.assertEqual(active_pdfs(), {unfiled_id: None})
+        items = trash()
+        self.assertEqual(items[collection_id]["type"], "collection")
+        self.assertEqual(items[str(first.id)]["collection_id"], collection_id)
+        self.assertEqual(items[str(second.id)]["collection_name"], "My collection")
+        self.assertEqual(items[earlier_id]["deleted_at"], earlier_deleted_at)
+        self.assertEqual(
+            self.client.post(
+                f"{base}/collections", json={"name": "My collection"}
+            ).status_code,
+            409,
+        )
+
+        self.assertEqual(restore(first_ref, collection_ref), {"restored": 3})
+        self.assertEqual(active_pdfs(), {**main_ids, unfiled_id: None})
+        self.assertEqual(set(trash()), {earlier_id})
+        self.assertEqual(self.client.delete(collection_path).status_code, 204)
+        self.assertEqual(restore(first_ref), {"restored": 2})
+        self.assertEqual(
+            active_pdfs(), {str(first.id): collection_id, unfiled_id: None}
+        )
+        self.assertEqual(set(trash()), {str(second.id), earlier_id})
+
+        self.assertEqual(self.client.delete(collection_path).status_code, 204)
+        self.assertEqual(restore(collection_ref), {"restored": 2})
+        self.assertEqual(set(trash()), {str(second.id), earlier_id})
+        self.assertEqual(
+            restore({"id": earlier_id, "type": "document"}), {"restored": 1}
+        )
+        self.assertEqual(active_pdfs()[earlier_id], collection_id)
+
+    def test_permanent_collection_delete_removes_its_pdfs(self):
+        collection = self.client.post(
+            "/api/v1/collections", json={"name": "Discarded collection"}
+        ).json()
+        with Session(self.test_engine, expire_on_commit=False) as session:
+            document = Document(
+                doc_id="provider-discarded",
+                filename="discarded.pdf",
+                collection_id=UUID(collection["id"]),
+                status="ready",
+            )
+            session.add(document)
+            session.commit()
+        self.assertEqual(
+            self.client.delete(f"/api/v1/collections/{collection['id']}").status_code,
+            204,
+        )
+        with patch("app.routers.trash.get_pageindex_client") as provider:
             response = self.client.post(
-                "/api/v1/chat/",
+                "/api/v1/trash/permanent-delete",
                 json={
-                    "collection_id": collection_id,
-                    "question": "What is in this collection?",
+                    "items": [
+                        {"id": str(document.id), "type": "document"},
+                        {"id": collection["id"], "type": "collection"},
+                    ]
                 },
             )
-            self.assertEqual(response.status_code, 201, response.text)
-            self.assertEqual(
-                provider.chat.call_args.kwargs["collection_id"], "provider-collection"
+            self.assertEqual(response.json(), {"deleted": 2})
+            provider.return_value.delete_document.assert_called_once_with(
+                "provider-discarded"
             )
-            follow_up = self.client.post(
-                "/api/v1/chat/",
-                json={
-                    "session_id": response.json()["session_id"],
-                    "doc_id": "another-document",
-                    "question": "Continue",
-                },
-            )
-            self.assertEqual(follow_up.status_code, 409)
-            provider.chat.assert_called_once()
+        self.assertEqual(self.client.get("/api/v1/trash/items").json(), [])
 
     def test_pending_extraction_updates_and_hides_deleted_job(self):
         provider = MagicMock()
